@@ -19,7 +19,7 @@ index 6582eee..8678392 100644
      #[inline(always)]
      #[allow(clippy::unnecessary_cast)]
      fn is(&self, mode: mode_t) -> bool {
--        (self.st.st_mode & libc::S_IFMT as u32) as mode_t == mode
+-        (self.st.st_mode & libc::S_IFMT as c_uint) as mode_t == mode
 +        ((self.st.st_mode as mode_t) & libc::S_IFMT) == mode
      }
  

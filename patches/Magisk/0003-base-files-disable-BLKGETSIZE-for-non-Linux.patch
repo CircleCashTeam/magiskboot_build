@@ -15,10 +15,10 @@ diff --git a/native/src/base/files.rs b/native/src/base/files.rs
 index f107c34..465d63a 100644
 --- a/native/src/base/files.rs
 +++ b/native/src/base/files.rs
-@@ -483,20 +485,32 @@
- 
- // We mark the returned slice static because it is valid until explicitly unmapped
- pub(crate) fn map_file(path: &Utf8CStr, rw: bool) -> io::Result<&'static mut [u8]> {
+@@ -904,11 +904,17 @@ pub(crate) fn map_file_at(
+     path: &Utf8CStr,
+     rw: bool,
+ ) -> io::Result<&'static mut [u8]> {
 +    cfg_if::cfg_if! {
 +        if #[cfg(any(target_os = "linux", target_os = "android"))] {
      #[cfg(target_pointer_width = "64")]
@@ -27,19 +27,20 @@ index f107c34..465d63a 100644
      #[cfg(target_pointer_width = "32")]
      const BLKGETSIZE64: u32 = 0x80041272;
 +        } else {
-+            // no-op
++                // no-op
 +        }
 +    }
  
      let flag = if rw { O_RDWR } else { O_RDONLY };
-     let f = File::from(open_fd!(path, flag | O_CLOEXEC)?);
+     let fd = unsafe {
+@@ -919,9 +925,15 @@ pub(crate) fn map_file_at(
  
-     let attr = FsPath::from(path).get_attr()?;
+     let attr = fd_get_attr(fd.as_raw_fd())?;
      let sz = if attr.is_block_device() {
 +        cfg_if::cfg_if! {
 +            if #[cfg(any(target_os = "linux", target_os = "android"))] {
          let mut sz = 0_u64;
-         unsafe { ioctl(f.as_raw_fd(), BLKGETSIZE64, &mut sz) }.as_os_err()?;
+         unsafe { ioctl(fd.as_raw_fd(), BLKGETSIZE64, &mut sz) }.as_os_err()?;
          sz
 +            } else {
 +                panic!("Unreachable code");
