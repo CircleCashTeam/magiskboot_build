@@ -118,6 +118,10 @@ if (NOT WITHOUT_BUILD)
     include(CMakeLists.stub.txt)
 endif()
 
+if (PREFER_STATIC_LINKING)
+    list(APPEND RUSTFLAGS -Clink-args=-static)
+endif()
+
 # CPack configuration for creating source tarballs which already include
 # patched versions of the vendored dependencies.
 set(CPACK_SOURCE_GENERATOR "TXZ")
