@@ -72,7 +72,8 @@ if (WIN32)
         src/libc-compat/winsup/uio.c
         src/libc-compat/winsup/internal/assert.c
         src/libc-compat/winsup/internal/errno.c
-        src/libc-compat/winsup/internal/fd.c)
+        src/libc-compat/winsup/internal/fd.c
+        src/libc-compat/winsup/getpagesize.c)
     target_link_libraries(platform_stubs INTERFACE shlwapi)
 
     # these source files contains symbols that must not be excluded from the final executable
