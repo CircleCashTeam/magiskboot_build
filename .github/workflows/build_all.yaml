@@ -48,6 +48,10 @@ jobs:
       full_lto: ${{ steps.determine_lto_type.outputs.FULL_LTO }}
       lto_ldflags: ${{ steps.determine_lto_type.outputs.LTO_LDFLAGS }}
 
+      cxx_flags: ${{ steps.detect_build_type.outputs.CXXFLAGS }}
+      c_flags: ${{ steps.detect_build_type.outputs.CFLAGS }}
+      ld_flags: ${{ steps.detect_build_type.outputs.LDFLAGS }}
+
     steps:
       - name: Determine short Git commit SHA
         id: get_short_sha
@@ -61,10 +65,18 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             if [[ "${{ github.event.inputs.debug-build }}" == "true" ]]; then
               CMAKE_BUILD_TYPE=Debug
+            else
+              # I hope this could make magiskboot more small
+              CFLAGS="-Os"
+              CXXFLAGS="-g -Os -ffunction-sections -fdata-sections -fno-rtti -fno-exceptions"
+              LDFLAGS="-s -Wl,--gc-sections"
             fi
           fi
           echo "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}" | tee -a $GITHUB_OUTPUT
           echo "BUILD_TYPE=${CMAKE_BUILD_TYPE,,}" | tee -a $GITHUB_OUTPUT
+          echo "CFLAGS=${CFLAGS}" | tee -a $GITHUB_OUTPUT
+          echo "CXXFLAGS=${CXXFLAGS}" | tee -a $GITHUB_OUTPUT
+          echo "LDFLAGS=${LDFLAGS}" | tee -a $GITHUB_OUTPUT
 
       - name: Determine LTO type
         id: determine_lto_type
@@ -167,7 +179,7 @@ jobs:
         run: |
           apk update
           apk add build-base linux-headers bash wget file xxd xz-dev lz4-dev bzip2-dev zlib-dev \
-                  pkgconf clang lld libc++-dev cmake samurai rust cargo libunwind-dev
+                  pkgconf clang lld libc++-dev cmake samurai rust cargo llvm-libunwind-dev
 
       - name: Synchronize (source)
         uses: yogeshlonkar/wait-for-jobs@v0.2.1
@@ -189,8 +201,10 @@ jobs:
           echo -e "\n### configure ###\n"
           CC=clang CXX=clang++ cmake -G Ninja -B build \
                   -DCMAKE_BUILD_TYPE=${{ needs.vars.outputs.cmake_build_type }} \
-                  -DCMAKE_EXE_LINKER_FLAGS=" ${{ matrix.lto_ldflags }}" \
-                  -DFULL_RUST_LTO=${{ matrix.full_lto }}
+                  -DCMAKE_EXE_LINKER_FLAGS=" ${{ matrix.lto_ldflags }} ${{ needs.vars.outputs.ld_flags }} \
+                  -DCMAKE_C_FLAGS=" ${{ needs.vars.outputs.c_flags }}" \
+                  -DCMAKE_CXX_FLAGS=" ${{ needs.vars.outputs.cxx_flags }}" \
+                  -DPREFER_STATIC_LINKING=ON -DFULL_RUST_LTO=${{ matrix.full_lto }}
 
           echo -e "\n### build ###\n"
           cmake --build build -j $(nproc) -v
@@ -265,7 +279,9 @@ jobs:
           echo -e "\n### configure ###\n"
           CC=clang CXX=clang++ cmake -G Ninja -B build -DCMAKE_AR=llvm-ar -DCMAKE_RANLIB=llvm-ranlib \
               -DCMAKE_BUILD_TYPE=${{ needs.vars.outputs.cmake_build_type }} \
-              -DCMAKE_EXE_LINKER_FLAGS=" ${{ needs.vars.outputs.lto_ldflags }}" \
+              -DCMAKE_EXE_LINKER_FLAGS=" ${{ matrix.lto_ldflags }} ${{ needs.vars.outputs.ld_flags }} \
+              -DCMAKE_C_FLAGS=" ${{ needs.vars.outputs.c_flags }}" \
+              -DCMAKE_CXX_FLAGS=" ${{ needs.vars.outputs.cxx_flags }}" \
               -DPREFER_STATIC_LINKING=ON -DFULL_RUST_LTO=${{ needs.vars.outputs.full_lto }}
 
           echo -e "\n### build ###\n"
@@ -425,7 +441,9 @@ jobs:
               -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.cmake_arch }} -DCMAKE_SYSTEM_NAME=Darwin \
               -DCMAKE_C_COMPILER_TARGET=${{ matrix.clang_target }} -DCMAKE_CXX_COMPILER_TARGET=${{ matrix.clang_target }} \
               -DCMAKE_AR=llvm-ar -DCMAKE_RANLIB=llvm-ranlib \
-              -DCMAKE_EXE_LINKER_FLAGS=" ${{ needs.vars.outputs.lto_ldflags }}" \
+              -DCMAKE_EXE_LINKER_FLAGS=" ${{ matrix.lto_ldflags }} ${{ needs.vars.outputs.ld_flags }} \
+              -DCMAKE_C_FLAGS=" ${{ needs.vars.outputs.c_flags }}" \
+              -DCMAKE_CXX_FLAGS=" ${{ needs.vars.outputs.cxx_flags }}" \
               -DRust_CARGO_TARGET=${{ matrix.rust_target }} -DPREFER_STATIC_LINKING=ON \
               -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
               -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }} \
@@ -598,7 +616,9 @@ jobs:
           . "$HOME/.cargo/env"
           CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=${{ needs.vars.outputs.cmake_build_type }} \
                     -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.cmake_arch }} -DCMAKE_SYSTEM_NAME=Windows \
-                    -DCMAKE_EXE_LINKER_FLAGS=" ${{ matrix.ldlibs }} ${{ needs.vars.outputs.lto_ldflags }}" \
+                    -DCMAKE_EXE_LINKER_FLAGS=" ${{ matrix.lto_ldflags }} ${{ needs.vars.outputs.ld_flags }} \
+                    -DCMAKE_C_FLAGS=" ${{ needs.vars.outputs.c_flags }}" \
+                    -DCMAKE_CXX_FLAGS=" ${{ needs.vars.outputs.cxx_flags }}" \
                     -DRust_CARGO_TARGET=${{ matrix.rust_target }} -DRUST_BUILD_STD=${{ matrix.build_rust_std }} -DPREFER_STATIC_LINKING=ON \
                     -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
                     -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }} -DMINGW=TRUE \
