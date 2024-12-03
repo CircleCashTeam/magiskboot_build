@@ -167,7 +167,7 @@ jobs:
         run: |
           apk update
           apk add build-base linux-headers bash wget file xxd xz-dev lz4-dev bzip2-dev zlib-dev \
-                  pkgconf clang lld libc++-dev cmake samurai rust cargo
+                  pkgconf clang lld libc++-dev cmake samurai rust cargo libunwind-dev
 
       - name: Synchronize (source)
         uses: yogeshlonkar/wait-for-jobs@v0.2.1
