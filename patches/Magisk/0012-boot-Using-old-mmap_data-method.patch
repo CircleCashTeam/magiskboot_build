@@ -1,0 +1,26 @@
+From 1b57501cd05c2ab92fd0bd5a955e9bc24c239335 Mon Sep 17 00:00:00 2001
+From: affggh <affggh@localhost.localdomain>
+Date: Tue, 3 Dec 2024 22:55:58 +0800
+Subject: [PATCH] boot: Using old mmap_data method
+
+---
+ native/src/boot/bootimg.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/native/src/boot/bootimg.cpp b/native/src/boot/bootimg.cpp
+index 12b7265..c05a5e5 100644
+--- a/native/src/boot/bootimg.cpp
++++ b/native/src/boot/bootimg.cpp
+@@ -793,7 +793,8 @@ void repack(const char *src_img, const char *out_img, bool skip_comp) {
+             } else {
+                 ssprintf(file_name, sizeof(file_name), "%s.cpio", it.ramdisk_name);
+             }
+-            mmap_data m(dirfd, file_name);
++            //mmap_data m(dirfd, file_name);
++            mmap_data m((string(VND_RAMDISK_DIR) + '/' + file_name).c_str());
+             format_t fmt = check_fmt_lg(boot.ramdisk + it.ramdisk_offset, it.ramdisk_size);
+             it.ramdisk_offset = ramdisk_offset;
+             if (!skip_comp && !COMPRESSED_ANY(check_fmt(m.buf(), m.sz())) && COMPRESSED(fmt)) {
+-- 
+2.39.5
+

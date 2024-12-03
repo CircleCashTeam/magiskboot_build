@@ -1,0 +1,153 @@
+From 26448a1d9f05db990fea14b208714c79216f4968 Mon Sep 17 00:00:00 2001
+From: affggh <affggh@localhost.localdomain>
+Date: Tue, 3 Dec 2024 21:57:27 +0800
+Subject: [PATCH] Revert "Support vendor boot unpack/repack"
+
+This reverts commit 5ac7dc0b37fd715309560c7c03529fb59ee58785.
+---
+ native/src/base/cxx_extern.rs |  9 ---------
+ native/src/base/files.cpp     |  8 --------
+ native/src/base/files.hpp     |  1 -
+ native/src/base/files.rs      | 28 ++++------------------------
+ native/src/base/lib.rs        |  2 --
+ 5 files changed, 4 insertions(+), 44 deletions(-)
+
+diff --git a/native/src/base/cxx_extern.rs b/native/src/base/cxx_extern.rs
+index c53fbd9..f57026f 100644
+--- a/native/src/base/cxx_extern.rs
++++ b/native/src/base/cxx_extern.rs
+@@ -11,7 +11,6 @@ use winsup::fd::{BorrowedFd, OwnedFd, RawFd};
+ use cfg_if::cfg_if;
+ use libc::{c_char, mode_t};
+ 
+-use crate::files::map_file_at;
+ pub(crate) use crate::xwrap::*;
+ use crate::{
+     clone_attr, cstr, fclone_attr, fd_path, map_fd, map_file, slice_from_ptr, CxxResultExt,
+@@ -66,14 +65,6 @@ pub(crate) fn map_file_for_cxx(path: &Utf8CStr, rw: bool) -> &'static mut [u8] {
+     map_file(path, rw).log_cxx().unwrap_or(&mut [])
+ }
+ 
+-pub(crate) fn map_file_at_for_cxx(fd: RawFd, path: &Utf8CStr, rw: bool) -> &'static mut [u8] {
+-    unsafe {
+-        map_file_at(BorrowedFd::borrow_raw(fd), path, rw)
+-            .log_cxx()
+-            .unwrap_or(&mut [])
+-    }
+-}
+-
+ pub(crate) fn map_fd_for_cxx(fd: RawFd, sz: usize, rw: bool) -> &'static mut [u8] {
+     unsafe {
+         cfg_if::cfg_if! {
+diff --git a/native/src/base/files.cpp b/native/src/base/files.cpp
+index 324f7b1..881ed8c 100644
+--- a/native/src/base/files.cpp
++++ b/native/src/base/files.cpp
+@@ -146,14 +146,6 @@ mmap_data::mmap_data(const char *name, bool rw) {
+     }
+ }
+ 
+-mmap_data::mmap_data(int dirfd, const char *name, bool rw) {
+-    auto slice = rust::map_file_at(dirfd, name, rw);
+-    if (!slice.empty()) {
+-        _buf = slice.data();
+-        _sz = slice.size();
+-    }
+-}
+-
+ mmap_data::mmap_data(int fd, size_t sz, bool rw) {
+     auto slice = rust::map_fd(fd, sz, rw);
+     if (!slice.empty()) {
+diff --git a/native/src/base/files.hpp b/native/src/base/files.hpp
+index 4f6c0a9..4ba20b2 100644
+--- a/native/src/base/files.hpp
++++ b/native/src/base/files.hpp
+@@ -40,7 +40,6 @@ struct mmap_data : public byte_data {
+     ALLOW_MOVE_ONLY(mmap_data)
+ 
+     explicit mmap_data(const char *name, bool rw = false);
+-    mmap_data(int dirfd, const char *name, bool rw = false);
+     mmap_data(int fd, size_t sz, bool rw = false);
+     ~mmap_data();
+ };
+diff --git a/native/src/base/files.rs b/native/src/base/files.rs
+index 213425a..d6b6d35 100644
+--- a/native/src/base/files.rs
++++ b/native/src/base/files.rs
+@@ -920,14 +920,6 @@ impl MappedFile {
+         Ok(MappedFile(map_file(path, true)?))
+     }
+ 
+-    pub fn openat<T: AsFd>(dir: &T, path: &Utf8CStr) -> io::Result<MappedFile> {
+-        Ok(MappedFile(map_file_at(dir.as_fd(), path, false)?))
+-    }
+-
+-    pub fn openat_rw<T: AsFd>(dir: &T, path: &Utf8CStr) -> io::Result<MappedFile> {
+-        Ok(MappedFile(map_file_at(dir.as_fd(), path, true)?))
+-    }
+-
+     pub fn create(fd: BorrowedFd, sz: usize, rw: bool) -> io::Result<MappedFile> {
+         Ok(MappedFile(map_fd(fd, sz, rw)?))
+     }
+@@ -960,14 +952,6 @@ extern "C" {
+ 
+ // We mark the returned slice static because it is valid until explicitly unmapped
+ pub(crate) fn map_file(path: &Utf8CStr, rw: bool) -> io::Result<&'static mut [u8]> {
+-    unsafe { map_file_at(BorrowedFd::borrow_raw(libc::AT_FDCWD), path, rw) }
+-}
+-
+-pub(crate) fn map_file_at(
+-    dirfd: BorrowedFd,
+-    path: &Utf8CStr,
+-    rw: bool,
+-) -> io::Result<&'static mut [u8]> {
+     cfg_if::cfg_if! {
+         if #[cfg(any(target_os = "linux", target_os = "android"))] {
+     #[cfg(target_pointer_width = "64")]
+@@ -981,18 +965,14 @@ pub(crate) fn map_file_at(
+     }
+ 
+     let flag = if rw { O_RDWR } else { O_RDONLY };
+-    let fd = unsafe {
+-        OwnedFd::from_raw_fd(
+-            libc::openat(dirfd.as_raw_fd(), path.as_ptr(), flag | O_CLOEXEC).check_os_err()?,
+-        )
+-    };
++    let file = FsPath::from(path).open(flag | O_CLOEXEC)?;
+ 
+-    let attr = fd_get_attr(fd.as_raw_fd())?;
++    let attr = fd_get_attr(file.as_raw_fd())?;
+     let sz = if attr.is_block_device() {
+         cfg_if::cfg_if! {
+             if #[cfg(any(target_os = "linux", target_os = "android"))] {
+         let mut sz = 0_u64;
+-        unsafe { ioctl(fd.as_raw_fd(), BLKGETSIZE64, &mut sz) }.as_os_err()?;
++        unsafe { ioctl(file.as_raw_fd(), BLKGETSIZE64, &mut sz) }.as_os_err()?;
+         sz
+             } else {
+                 panic!("Unreachable code");
+@@ -1002,7 +982,7 @@ pub(crate) fn map_file_at(
+         attr.st.st_size as u64
+     };
+ 
+-    map_fd(fd.as_fd(), sz as usize, rw)
++    map_fd(file.as_fd(), sz as usize, rw)
+ }
+ 
+ pub(crate) fn map_fd(fd: BorrowedFd, sz: usize, rw: bool) -> io::Result<&'static mut [u8]> {
+diff --git a/native/src/base/lib.rs b/native/src/base/lib.rs
+index a4e500d..46b6fd8 100644
+--- a/native/src/base/lib.rs
++++ b/native/src/base/lib.rs
+@@ -63,8 +63,6 @@ pub mod ffi {
+         fn fd_path_for_cxx(fd: i32, buf: &mut [u8]) -> isize;
+         #[cxx_name = "map_file"]
+         fn map_file_for_cxx(path: Utf8CStrRef, rw: bool) -> &'static mut [u8];
+-        #[cxx_name = "map_file_at"]
+-        fn map_file_at_for_cxx(fd: i32, path: Utf8CStrRef, rw: bool) -> &'static mut [u8];
+         #[cxx_name = "map_fd"]
+         fn map_fd_for_cxx(fd: i32, sz: usize, rw: bool) -> &'static mut [u8];
+     }
+-- 
+2.39.5
+
