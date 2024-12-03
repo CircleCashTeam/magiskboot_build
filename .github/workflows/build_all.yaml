@@ -452,84 +452,6 @@ jobs:
         if: failure()
         uses: andymckay/cancel-action@0.4
 
-  build-windows:
-    name: Build (Windows)
-    runs-on: windows-latest
-    permissions:
-      actions: write
-    needs: [vars]
-    env:
-      MSYS: "winsymlinks:native"
-
-      msystem: CLANG64
-      note: "ucrt-x86_64-standalone"
-      upload_prefix: "windows-mingw-w64"
-
-    steps:
-      - name: Prepare
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: ${{ env.msystem }}
-          update: true
-          # installing vim for xxd
-          install: >-
-            base-devel file wget vim
-          pacboy: >-
-            xz:p lz4:p bzip2:p zlib:p pkgconf:p clang:p
-            lld:p cmake:p libc++:p ninja:p rust:p
-
-      - name: Synchronize (source)
-        uses: yogeshlonkar/wait-for-jobs@v0.2.1
-        with:
-          jobs: 'Prepare (source)'
-
-      - name: Prepare (source)
-        uses: actions/download-artifact@v4
-        with:
-          name: srcpkg
-
-      - name: Build
-        shell: msys2 {0}
-        run: |
-          echo -e "\n### extract source ###\n"
-          tar -xf magiskboot_*-src.tar.xz
-
-          cd magiskboot_*-src/
-
-          echo -e "\n### configure ###\n"
-          CC=clang CXX=clang++ cmake -G Ninja -B build \
-              -DCMAKE_BUILD_TYPE=${{ needs.vars.outputs.cmake_build_type }} \
-              -DCMAKE_EXE_LINKER_FLAGS=" ${{ needs.vars.outputs.lto_ldflags }}" \
-              -DPREFER_STATIC_LINKING=ON -DFULL_RUST_LTO=${{ needs.vars.outputs.full_lto }}
-
-          echo -e "\n### build ###\n"
-          cmake --build build -j $(nproc) -v
-          strip build/magiskboot*.exe
-
-          file build/magiskboot*.exe
-          ldd build/magiskboot*.exe
-          ./build/magiskboot*.exe || true
-          rm -rf $GITHUB_WORKSPACE/${{ env.progname }}-out && mkdir -p $GITHUB_WORKSPACE/${{ env.progname }}-out
-          cp -afv build/magiskboot*.exe $GITHUB_WORKSPACE/${{ env.progname }}-out
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          if-no-files-found: error
-          name: ${{ env.progname }}-${{ needs.vars.outputs.short_sha }}-${{ needs.vars.outputs.build_type }}-${{ env.upload_prefix }}-${{ env.note }}
-          path: ${{ github.workspace }}/${{ env.progname }}-out/magiskboot*.exe
-
-      - name: Check
-        shell: msys2 {0}
-        run: |
-          cd magiskboot_*-src/
-          find $GITHUB_WORKSPACE/${{ env.progname }}-out -name magiskboot\*.exe -exec ./scripts/magiskboot_test.sh {} +
-
-      # Fail fast
-      - name: Cancel other jobs
-        if: failure()
-        uses: andymckay/cancel-action@0.4
-
   build-windows-cross:
     name: Build (Windows) (Cross)
     runs-on: ubuntu-latest
@@ -539,15 +461,38 @@ jobs:
     strategy:
       matrix:
         include:
-          - crt: msvcrt
+          # Link issue cannot solve
+          #- crt: msvcrt
+          #  upload_suffix: "i686-standalone"
+          #  cmake_arch: x86
+          #  cc: i686-w64-mingw32-clang
+          #  cxx: i686-w64-mingw32-clang++
+          #  strip: i686-w64-mingw32-strip
+          #  vcpkg_triplet: x86-mingw-static
+          #  rust_target: i686-pc-windows-gnu
+          #  build_rust_std: "OFF"
+
+          - crt: ucrt
             upload_suffix: "i686-standalone"
             cmake_arch: x86
             cc: i686-w64-mingw32-clang
             cxx: i686-w64-mingw32-clang++
             strip: i686-w64-mingw32-strip
+            ldlibs: "-lbcrypt"
             vcpkg_triplet: x86-mingw-static
-            rust_target: i686-pc-windows-gnu
-            build_rust_std: "OFF"
+            rust_target: x86-pc-windows-gnullvm
+            build_rust_std: "ON"
+
+          - crt: ucrt
+            upload_suffix: "x86_64-standalone"
+            cmake_arch: x86_64
+            cc: x86_64-w64-mingw32-clang
+            cxx: x86_64-w64-mingw32-clang++
+            strip: x86_64-w64-mingw32-strip
+            ldlibs: "-lbcrypt"
+            vcpkg_triplet: x64-mingw-static
+            rust_target: x86_64-pc-windows-gnullvm
+            build_rust_std: "ON"
 
           - crt: ucrt
             upload_suffix: "arm64-standalone"
