@@ -6,14 +6,13 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <stdint.h>
 
 #include "../include/winsup/getpagesize_compat.h"
 
 /*
  * I hope this will work on windows
  */
-static inline int32_t getpagesize() {
+int32_t getpagesize() {
     SYSTEM_INFO systemInfo;
     GetSystemInfo(&systemInfo);
 

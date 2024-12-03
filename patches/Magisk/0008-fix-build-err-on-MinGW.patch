@@ -332,7 +332,7 @@ diff --git a/native/src/boot/bootimg.cpp b/native/src/boot/bootimg.cpp
 index a80a746..857eff2 100644
 --- a/native/src/boot/bootimg.cpp
 +++ b/native/src/boot/bootimg.cpp
-@@ -1,6 +1,11 @@
+@@ -1,6 +1,12 @@
  #include <functional>
  #include <memory>
 
@@ -340,6 +340,7 @@ index a80a746..857eff2 100644
 +#  define O_CLOEXEC O_NOINHERIT
 +
 +#  include <winsup/str_compat.h>
++#  include <winsup/getpagesize_compat.h>
 +#endif
  #include <base.hpp>
 
