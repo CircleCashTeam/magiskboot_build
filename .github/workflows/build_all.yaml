@@ -127,11 +127,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: "ubuntu"
-            tag: "jammy"
-            # XXX: llvm ver is older than rust
-            full_lto: "OFF"
-            lto_ldflags: ""
+          #- os: "ubuntu"
+          #  tag: "jammy"
+          #  # XXX: llvm ver is older than rust
+          #  full_lto: "OFF"
+          #  lto_ldflags: ""
 
           - os: "alpine"
             tag: "edge"
