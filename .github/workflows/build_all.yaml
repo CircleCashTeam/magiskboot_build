@@ -1,0 +1,682 @@
+name: CI
+on:
+  workflow_dispatch:
+    inputs:
+      debug-build:
+        type: boolean
+        description: "Build in debug mode instead of release"
+      full-lto:
+        type: boolean
+        description: "Whether to enable full LTO"
+
+  push:
+    branches-ignore:
+      - main
+    paths-ignore:
+      - '.github/workflows/release.yaml'
+      - '.github/ISSUE_TEMPLATE/**'
+      - 'patches-contrib/**'
+      - 'LICENSE'
+      - '**/*.md'
+      - 'README.md'
+
+  pull_request:
+    paths-ignore:
+      - '.github/workflows/release.yaml'
+      - '.github/__release_template.txt'
+      - 'patches-contrib/**'
+      - 'LICENSE'
+      - '**/*.md'
+      - 'README.md'
+
+env:
+  progname: "magiskboot"
+
+permissions:
+  contents: read
+
+jobs:
+  vars:
+    name: Prepare (variables)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: none
+    outputs:
+      short_sha: ${{ steps.get_short_sha.outputs.SHORT_SHA }}
+      cmake_build_type: ${{ steps.detect_build_type.outputs.CMAKE_BUILD_TYPE }}
+      build_type: ${{ steps.detect_build_type.outputs.BUILD_TYPE }}
+      full_lto: ${{ steps.determine_lto_type.outputs.FULL_LTO }}
+      lto_ldflags: ${{ steps.determine_lto_type.outputs.LTO_LDFLAGS }}
+
+    steps:
+      - name: Determine short Git commit SHA
+        id: get_short_sha
+        run: |
+          echo "SHORT_SHA=`echo ${GITHUB_SHA} | cut -c 1-7`" | tee -a $GITHUB_OUTPUT
+
+      - name: Detect build types
+        id: detect_build_type
+        run: |
+          CMAKE_BUILD_TYPE=Release
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ "${{ github.event.inputs.debug-build }}" == "true" ]]; then
+              CMAKE_BUILD_TYPE=Debug
+            fi
+          fi
+          echo "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}" | tee -a $GITHUB_OUTPUT
+          echo "BUILD_TYPE=${CMAKE_BUILD_TYPE,,}" | tee -a $GITHUB_OUTPUT
+
+      - name: Determine LTO type
+        id: determine_lto_type
+        run: |
+          FULL_LTO=OFF
+          LTO_LDFLAGS=""
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            if [[ "${{ github.event.inputs.full-lto }}" == "true" ]]; then
+              FULL_LTO=ON
+              LTO_LDFLAGS="-flto"
+            fi
+          fi
+          echo "FULL_LTO=${FULL_LTO}" | tee -a $GITHUB_OUTPUT
+          echo "LTO_LDFLAGS=${LTO_LDFLAGS}" | tee -a $GITHUB_OUTPUT
+
+  src:
+    name: Prepare (source)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --no-install-suggests patch cmake ninja-build
+
+      - name: Prepare (Git)
+        run: |
+          git config --global user.email "user@example.com"
+          git config --global user.name "Example user"
+
+      - name: Prepare (checkout)
+        uses: actions/checkout@v4
+
+      - name: Prepare (submodule)
+        run: |
+          ./scripts/clone_submodules.sh
+
+          for _repo in $(git submodule foreach --recursive --quiet 'env'); do
+            git config --global --add safe.directory "$_repo"
+          done
+          unset _repo
+
+      - name: Package source
+        run: |
+          CC=true cmake -B build -G Ninja -DCMAKE_C_COMPILER_WORKS=YES -DWITHOUT_BUILD=ON
+          cmake --build build -t package_source -v
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: srcpkg
+          if-no-files-found: error
+          path: ${{ github.workspace }}/build/magiskboot_*-src.tar.xz
+
+  build-linux:
+    name: Build (Linux)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    needs: [vars]
+    strategy:
+      matrix:
+        include:
+          - os: "ubuntu"
+            tag: "jammy"
+            # XXX: llvm ver is older than rust
+            full_lto: "OFF"
+            lto_ldflags: ""
+
+          - os: "alpine"
+            tag: "edge"
+            full_lto: ${{ needs.vars.outputs.full_lto }}
+            lto_ldflags: ${{ needs.vars.outputs.lto_ldflags }}
+
+    container:
+      image: ${{ matrix.os }}:${{ matrix.tag }}
+      volumes:
+        - ${{ github.workspace }}:/magiskboot_workspace
+
+      # New versions of glibc use the new clone3() syscall which has not
+      # yet been whitelisted in GitHub's secomp profile. To prevent jobs
+      # using these distros from failing (e.g. openSUSE) change the
+      # secomp policy.
+      #
+      # See https://github.com/nmeum/android-tools/pull/48#issuecomment-944893176
+      options: --security-opt seccomp=unconfined
+
+    steps:
+      - name: Prepare (Ubuntu)
+        if: matrix.os == 'ubuntu'
+        run: |
+          apt update
+          DEBIAN_FRONTEND=noninteractive apt install -y wget tar file xxd \
+              build-essential liblzma-dev liblz4-dev libbz2-dev zlib1g-dev pkg-config clang-15 \
+              lld-15 libc++-15-dev libc++abi-15-dev cmake ninja-build rustc cargo
+          ln -s $(which clang-15) $(dirname $(which clang-15))/clang
+          ln -s $(which clang++-15) $(dirname $(which clang-15))/clang++
+
+      - name: Prepare (Alpine Linux)
+        if: matrix.os == 'alpine'
+        run: |
+          apk update
+          apk add build-base linux-headers bash wget file xxd xz-dev lz4-dev bzip2-dev zlib-dev \
+                  pkgconf clang lld libc++-dev cmake samurai rust cargo
+
+      - name: Synchronize (source)
+        uses: yogeshlonkar/wait-for-jobs@v0.2.1
+        with:
+          jobs: 'Prepare (source)'
+
+      - name: Prepare (source)
+        uses: actions/download-artifact@v4
+        with:
+          name: srcpkg
+
+      - name: Build
+        run: |
+          echo -e "\n### extract source ###\n"
+          tar -xf magiskboot_*-src.tar.xz
+
+          cd magiskboot_*-src/
+
+          echo -e "\n### configure ###\n"
+          CC=clang CXX=clang++ cmake -G Ninja -B build \
+                  -DCMAKE_BUILD_TYPE=${{ needs.vars.outputs.cmake_build_type }} \
+                  -DCMAKE_EXE_LINKER_FLAGS=" ${{ matrix.lto_ldflags }}" \
+                  -DFULL_RUST_LTO=${{ matrix.full_lto }}
+
+          echo -e "\n### build ###\n"
+          cmake --build build -j $(nproc) -v
+
+          file build/magiskboot*
+          ldd build/magiskboot* || true
+          ./build/magiskboot* || true
+          rm -rf /magiskboot_workspace/${{ env.progname }}-out
+          mkdir -p /magiskboot_workspace/${{ env.progname }}-out
+          cp -afv build/magiskboot* /magiskboot_workspace/${{ env.progname }}-out
+
+      - name: Check
+        run: |
+          cd magiskboot_*-src/
+          ./scripts/magiskboot_test.sh /magiskboot_workspace/${{ env.progname }}-out/magiskboot*
+
+      # Fail fast
+      - name: Cancel other jobs
+        if: failure()
+        uses: andymckay/cancel-action@0.4
+
+  build-macos:
+    name: Build (macOS)
+    strategy:
+      matrix:
+        os_release: [12, 14]
+    runs-on: macos-${{ matrix.os_release }}
+    permissions:
+      actions: write
+    needs: [vars]
+    env:
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+
+      upload_suffix: "standalone"
+
+    steps:
+      - name: Prepare
+        run: |
+          brew update
+          # HACK: ignore werid symlink conflict
+          brew install --overwrite coreutils wget file xz lz4 pkg-config cmake ninja llvm rust || true
+          brew install --overwrite coreutils wget file xz lz4 pkg-config cmake ninja llvm rust
+          echo "$(brew --prefix)/opt/llvm/bin" | tee -a $GITHUB_PATH
+
+      - name: Prepare (Detect)
+        id: detect-runner
+        run: |
+          echo "uname_mach=$(uname -m)" | tee -a $GITHUB_OUTPUT
+
+      - name: Fix up Rust
+        if: matrix.os_release == 13
+        run: |
+          rm -rf ~/.cargo/registry/index
+
+      - name: Synchronize (source)
+        uses: yogeshlonkar/wait-for-jobs@v0.2.1
+        with:
+          jobs: 'Prepare (source)'
+
+      - name: Prepare (source)
+        uses: actions/download-artifact@v4
+        with:
+          name: srcpkg
+
+      - name: Build
+        run: |
+          echo -e "\n### extract source ###\n"
+          tar -xf magiskboot_*-src.tar.xz
+
+          cd magiskboot_*-src/
+
+          echo -e "\n### configure ###\n"
+          CC=clang CXX=clang++ cmake -G Ninja -B build -DCMAKE_AR=llvm-ar -DCMAKE_RANLIB=llvm-ranlib \
+              -DCMAKE_BUILD_TYPE=${{ needs.vars.outputs.cmake_build_type }} \
+              -DCMAKE_EXE_LINKER_FLAGS=" ${{ needs.vars.outputs.lto_ldflags }}" \
+              -DPREFER_STATIC_LINKING=ON -DFULL_RUST_LTO=${{ needs.vars.outputs.full_lto }}
+
+          echo -e "\n### build ###\n"
+          cmake --build build -j $(nproc) -v
+          strip build/magiskboot*
+
+          file build/magiskboot*
+          otool -L build/magiskboot*
+          ./build/magiskboot* || true
+          rm -rf $GITHUB_WORKSPACE/${{ env.progname }}-out && mkdir -p $GITHUB_WORKSPACE/${{ env.progname }}-out
+          cp -afv build/magiskboot* $GITHUB_WORKSPACE/${{ env.progname }}-out
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: ${{ env.progname }}-${{ needs.vars.outputs.short_sha }}-${{ needs.vars.outputs.build_type }}-macos-${{ matrix.os_release }}-${{ steps.detect-runner.outputs.uname_mach }}-${{ env.upload_suffix }}
+          path: ${{ github.workspace }}/${{ env.progname }}-out/magiskboot*
+
+      - name: Check
+        run: |
+          cd magiskboot_*-src/
+          ./scripts/magiskboot_test.sh $GITHUB_WORKSPACE/${{ env.progname }}-out/magiskboot*
+
+      # Fail fast
+      - name: Cancel other jobs
+        if: failure()
+        uses: andymckay/cancel-action@0.4
+
+  build-macos-cross:
+    name: Build (macOS) (Cross)
+    strategy:
+      matrix:
+        include:
+          - os_release: 14
+            # yeah crossing x86_64 from arm64 host now...
+            arch: "x86_64"
+            cmake_arch: "x86_64"
+            clang_target: "x86_64-apple-darwin"
+            vcpkg_triplet: "x64-osx"
+            rust_target: "x86_64-apple-darwin"
+
+    runs-on: macos-${{ matrix.os_release }}
+    permissions:
+      actions: write
+    needs: [vars]
+    env:
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
+
+      # only used on ARM64 runners,
+      # since there is no preinstalled Vcpkg on them
+      vcpkg_ver: 2024.01.12
+
+      upload_suffix: "standalone"
+
+    steps:
+      - name: Prepare (Host)
+        run: |
+          brew update
+          # HACK: ignore werid symlink conflict
+          brew install --overwrite coreutils file pkg-config cmake ninja llvm || true
+          brew install --overwrite coreutils file pkg-config cmake ninja llvm
+
+      - name: Prepare (Detect)
+        id: detect-runner
+        run: |
+          if [[ -z "${VCPKG_INSTALLATION_ROOT}" ]]; then
+            echo "has_vcpkg=false" | tee -a $GITHUB_OUTPUT
+          else
+            echo "has_vcpkg=true" | tee -a $GITHUB_OUTPUT
+          fi
+
+      - name: Cache (Vcpkg Bootstrap)
+        id: cache-vcpkg-boot
+        if: steps.detect-runner.outputs.has_vcpkg != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/${{ env.progname }}-vcpkg-strap
+          key: vcpkg-${{ env.vcpkg_ver }}-${{ runner.os }}-${{ matrix.os_release }}-${{ runner.arch }}
+
+      - name: Prepare (Vcpkg source)
+        if: steps.detect-runner.outputs.has_vcpkg != 'true' && steps.cache-vcpkg-boot.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: ${{ env.vcpkg_ver }}
+          path: ${{ env.progname }}-vcpkg-strap
+
+      - name: Prepare (Vcpkg Bootstrap)
+        if: steps.detect-runner.outputs.has_vcpkg != 'true' && steps.cache-vcpkg-boot.outputs.cache-hit != 'true'
+        run: |
+          cd ${{ env.progname }}-vcpkg-strap
+          ./bootstrap-vcpkg.sh
+
+      - name: Prepare (Vcpkg)
+        if: steps.detect-runner.outputs.has_vcpkg != 'true'
+        run: |
+          rm -rf $GITHUB_WORKSPACE/${{ env.progname }}-vcpkg/
+          cp -af $GITHUB_WORKSPACE/${{ env.progname }}-vcpkg-strap/ \
+                 $GITHUB_WORKSPACE/${{ env.progname }}-vcpkg/
+
+          VCPKG_INSTALLATION_ROOT="${GITHUB_WORKSPACE}/${{ env.progname }}-vcpkg"
+
+          echo "${VCPKG_INSTALLATION_ROOT}" | tee -a $GITHUB_PATH
+          echo "VCPKG_INSTALLATION_ROOT=${VCPKG_INSTALLATION_ROOT}" | tee -a $GITHUB_ENV
+
+      - name: Prepare (Environment)
+        run: |
+          echo "vcpkg_root=$VCPKG_INSTALLATION_ROOT" | tee -a $GITHUB_ENV
+
+      - name: Cache (Cross)
+        id: cache-cross-vcpkgs
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.vcpkg_root }}/installed
+          key: cross-vcpkgs-v2-${{ matrix.vcpkg_triplet }}-appleclang-macos-${{ matrix.os_release }}
+
+      - name: Prepare (Cross)
+        run: |
+          vcpkg install --host-triplet=${{ matrix.vcpkg_triplet }} liblzma lz4
+
+      - name: Prepare (PATH)
+        run: |
+          echo "$(brew --prefix)/opt/llvm/bin" | tee -a $GITHUB_PATH
+
+      - name: Prepare (Rust)
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          . "$HOME/.cargo/env"
+          rustup target add ${{ matrix.rust_target }}
+
+      - name: Fix up Rust
+        if: matrix.os_release == 13
+        run: |
+          rm -rf ~/.cargo/registry/index
+
+      - name: Synchronize (source)
+        uses: yogeshlonkar/wait-for-jobs@v0.2.1
+        with:
+          jobs: 'Prepare (source)'
+
+      - name: Prepare (source)
+        uses: actions/download-artifact@v4
+        with:
+          name: srcpkg
+
+      - name: Build
+        run: |
+          echo -e "\n### extract source ###\n"
+          tar -xf magiskboot_*-src.tar.xz
+
+          cd magiskboot_*-src/
+
+          echo -e "\n### configure ###\n"
+          . "$HOME/.cargo/env"
+          CC=clang CXX=clang++ cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=${{ needs.vars.outputs.cmake_build_type }} \
+              -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.cmake_arch }} -DCMAKE_SYSTEM_NAME=Darwin \
+              -DCMAKE_C_COMPILER_TARGET=${{ matrix.clang_target }} -DCMAKE_CXX_COMPILER_TARGET=${{ matrix.clang_target }} \
+              -DCMAKE_AR=llvm-ar -DCMAKE_RANLIB=llvm-ranlib \
+              -DCMAKE_EXE_LINKER_FLAGS=" ${{ needs.vars.outputs.lto_ldflags }}" \
+              -DRust_CARGO_TARGET=${{ matrix.rust_target }} -DPREFER_STATIC_LINKING=ON \
+              -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
+              -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }} \
+              -DFULL_RUST_LTO=${{ needs.vars.outputs.full_lto }}
+
+          echo -e "\n### build ###\n"
+          cmake --build build -j $(nproc) -v
+          strip build/magiskboot*
+
+          file build/magiskboot*
+          otool -L build/magiskboot*
+          rm -rf $GITHUB_WORKSPACE/${{ env.progname }}-out && mkdir -p $GITHUB_WORKSPACE/${{ env.progname }}-out
+          cp -afv build/magiskboot* $GITHUB_WORKSPACE/${{ env.progname }}-out
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: ${{ env.progname }}-${{ needs.vars.outputs.short_sha }}-${{ needs.vars.outputs.build_type }}-macos-${{ matrix.os_release }}-${{ matrix.arch }}-${{ env.upload_suffix }}
+          path: ${{ github.workspace }}/${{ env.progname }}-out/magiskboot*
+
+      # Fail fast
+      - name: Cancel other jobs
+        if: failure()
+        uses: andymckay/cancel-action@0.4
+
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-latest
+    permissions:
+      actions: write
+    needs: [vars]
+    env:
+      MSYS: "winsymlinks:native"
+
+      msystem: CLANG64
+      note: "ucrt-x86_64-standalone"
+      upload_prefix: "windows-mingw-w64"
+
+    steps:
+      - name: Prepare
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ env.msystem }}
+          update: true
+          # installing vim for xxd
+          install: >-
+            base-devel file wget vim
+          pacboy: >-
+            xz:p lz4:p bzip2:p zlib:p pkgconf:p clang:p
+            lld:p cmake:p libc++:p ninja:p rust:p
+
+      - name: Synchronize (source)
+        uses: yogeshlonkar/wait-for-jobs@v0.2.1
+        with:
+          jobs: 'Prepare (source)'
+
+      - name: Prepare (source)
+        uses: actions/download-artifact@v4
+        with:
+          name: srcpkg
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          echo -e "\n### extract source ###\n"
+          tar -xf magiskboot_*-src.tar.xz
+
+          cd magiskboot_*-src/
+
+          echo -e "\n### configure ###\n"
+          CC=clang CXX=clang++ cmake -G Ninja -B build \
+              -DCMAKE_BUILD_TYPE=${{ needs.vars.outputs.cmake_build_type }} \
+              -DCMAKE_EXE_LINKER_FLAGS=" ${{ needs.vars.outputs.lto_ldflags }}" \
+              -DPREFER_STATIC_LINKING=ON -DFULL_RUST_LTO=${{ needs.vars.outputs.full_lto }}
+
+          echo -e "\n### build ###\n"
+          cmake --build build -j $(nproc) -v
+          strip build/magiskboot*.exe
+
+          file build/magiskboot*.exe
+          ldd build/magiskboot*.exe
+          ./build/magiskboot*.exe || true
+          rm -rf $GITHUB_WORKSPACE/${{ env.progname }}-out && mkdir -p $GITHUB_WORKSPACE/${{ env.progname }}-out
+          cp -afv build/magiskboot*.exe $GITHUB_WORKSPACE/${{ env.progname }}-out
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: ${{ env.progname }}-${{ needs.vars.outputs.short_sha }}-${{ needs.vars.outputs.build_type }}-${{ env.upload_prefix }}-${{ env.note }}
+          path: ${{ github.workspace }}/${{ env.progname }}-out/magiskboot*.exe
+
+      - name: Check
+        shell: msys2 {0}
+        run: |
+          cd magiskboot_*-src/
+          find $GITHUB_WORKSPACE/${{ env.progname }}-out -name magiskboot\*.exe -exec ./scripts/magiskboot_test.sh {} +
+
+      # Fail fast
+      - name: Cancel other jobs
+        if: failure()
+        uses: andymckay/cancel-action@0.4
+
+  build-windows-cross:
+    name: Build (Windows) (Cross)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    needs: [vars]
+    strategy:
+      matrix:
+        include:
+          - crt: msvcrt
+            upload_suffix: "i686-standalone"
+            cmake_arch: x86
+            cc: i686-w64-mingw32-clang
+            cxx: i686-w64-mingw32-clang++
+            strip: i686-w64-mingw32-strip
+            vcpkg_triplet: x86-mingw-static
+            rust_target: i686-pc-windows-gnu
+            build_rust_std: "OFF"
+
+          - crt: ucrt
+            upload_suffix: "arm64-standalone"
+            cmake_arch: aarch64
+            cc: aarch64-w64-mingw32-clang
+            cxx: aarch64-w64-mingw32-clang++
+            strip: aarch64-w64-mingw32-strip
+
+            # XXX: what? why this wasn't detected by Corrosion automatically?
+            ldlibs: "-lbcrypt"
+
+            vcpkg_triplet: arm64-mingw-static
+            rust_target: aarch64-pc-windows-gnullvm
+            build_rust_std: "ON"
+    env:
+      toolchain_url: https://github.com/mstorsjo/llvm-mingw/releases/download
+      toolchain_ver: 20240404
+      upload_prefix: "windows-mingw-w64"
+
+    steps:
+      - name: Prepare (Host)
+        run: |
+          sudo apt update
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y curl wget tar file \
+                                        build-essential pkg-config cmake ninja-build
+
+      - name: Cache (LLVM MinGW)
+        id: cache-llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/${{ env.progname }}-llvm-mingw
+          key: llvm-mingw-${{ env.toolchain_ver }}-${{ matrix.crt }}-${{ runner.os }}
+
+      - name: Prepare (LLVM MinGW)
+        if: steps.cache-llvm-mingw.outputs.cache-hit != 'true'
+        run: |
+          rm -rf ${{ env.progname }}-llvm-mingw.tar.xz $GITHUB_WORKSPACE/${{ env.progname }}-llvm-mingw
+          wget ${{ env.toolchain_url }}/${{ env.toolchain_ver }}/llvm-mingw-${{ env.toolchain_ver }}-${{ matrix.crt }}-ubuntu-20.04-x86_64.tar.xz \
+                -O ${{ env.progname }}-llvm-mingw.tar.xz
+          mkdir -p $GITHUB_WORKSPACE/${{ env.progname }}-llvm-mingw
+          tar -x -f ${{ env.progname }}-llvm-mingw.tar.xz -C $GITHUB_WORKSPACE/${{ env.progname }}-llvm-mingw --strip-components=1
+          rm -f ${{ env.progname }}-llvm-mingw.tar.xz
+
+      - name: Prepare (PATH)
+        run: |
+          echo "$GITHUB_WORKSPACE/${{ env.progname }}-llvm-mingw/bin" | tee -a $GITHUB_PATH
+
+      - name: Prepare (Environment)
+        run: |
+          echo "vcpkg_root=$VCPKG_INSTALLATION_ROOT" | tee -a $GITHUB_ENV
+
+      - name: Cache (Cross)
+        id: cache-cross-vcpkgs
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.vcpkg_root }}/installed
+          key: cross-vcpkgs-v2-${{ matrix.vcpkg_triplet }}-llvm-mingw-${{ env.toolchain_ver }}-${{ matrix.crt }}
+
+      - name: Prepare (Cross)
+        run: |
+          vcpkg install --host-triplet=${{ matrix.vcpkg_triplet }} zlib liblzma lz4 'bzip2[core]'
+
+      - name: Prepare (Rust)
+        if: matrix.build_rust_std == 'OFF'
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+
+      - name: Prepare (Nightly Rust)
+        if: matrix.build_rust_std == 'ON'
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain nightly
+
+      - name: Prepare (Rust STD)
+        if: matrix.build_rust_std == 'OFF'
+        run: |
+          . "$HOME/.cargo/env"
+          rustup target add ${{ matrix.rust_target }}
+
+      - name: Prepare (Rust source)
+        if: matrix.build_rust_std == 'ON'
+        run: |
+          . "$HOME/.cargo/env"
+          rustup component add rust-src
+
+      - name: Synchronize (source)
+        uses: yogeshlonkar/wait-for-jobs@v0.2.1
+        with:
+          jobs: 'Prepare (source)'
+
+      - name: Prepare (source)
+        uses: actions/download-artifact@v4
+        with:
+          name: srcpkg
+
+      - name: Build
+        run: |
+          echo -e "\n### extract source ###\n"
+          tar -xf magiskboot_*-src.tar.xz
+
+          cd magiskboot_*-src/
+
+          echo -e "\n### configure ###\n"
+          . "$HOME/.cargo/env"
+          CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=${{ needs.vars.outputs.cmake_build_type }} \
+                    -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.cmake_arch }} -DCMAKE_SYSTEM_NAME=Windows \
+                    -DCMAKE_EXE_LINKER_FLAGS=" ${{ matrix.ldlibs }} ${{ needs.vars.outputs.lto_ldflags }}" \
+                    -DRust_CARGO_TARGET=${{ matrix.rust_target }} -DRUST_BUILD_STD=${{ matrix.build_rust_std }} -DPREFER_STATIC_LINKING=ON \
+                    -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
+                    -DVCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }} -DMINGW=TRUE \
+                    -DFULL_RUST_LTO=${{ needs.vars.outputs.full_lto }}
+
+          echo -e "\n### build ###\n"
+          cmake --build build -j $(nproc) -v
+          ${{ matrix.strip }} build/magiskboot*.exe
+
+          file build/magiskboot*.exe
+          strings build/magiskboot*.exe | grep -iE '^(\w|[-.])*\.dll$'
+          rm -rf $GITHUB_WORKSPACE/${{ env.progname }}-out && mkdir -p $GITHUB_WORKSPACE/${{ env.progname }}-out
+          cp -afv build/magiskboot*.exe $GITHUB_WORKSPACE/${{ env.progname }}-out
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: ${{ env.progname }}-${{ needs.vars.outputs.short_sha }}-${{ needs.vars.outputs.build_type }}-${{ env.upload_prefix }}-${{ matrix.crt }}-${{ matrix.upload_suffix }}
+          path: ${{ github.workspace }}/${{ env.progname }}-out/magiskboot*.exe
+
+      # Fail fast
+      - name: Cancel other jobs
+        if: failure()
+        uses: andymckay/cancel-action@0.4
+
