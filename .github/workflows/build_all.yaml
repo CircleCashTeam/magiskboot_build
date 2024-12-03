@@ -231,7 +231,7 @@ jobs:
     strategy:
       matrix:
         #os_release: [12, 14]
-        os_release: [12]
+        os_release: [14]
     runs-on: macos-${{ matrix.os_release }}
     permissions:
       actions: write
