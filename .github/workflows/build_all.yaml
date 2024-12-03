@@ -612,7 +612,7 @@ jobs:
           . "$HOME/.cargo/env"
           CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=${{ needs.vars.outputs.cmake_build_type }} \
                     -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.cmake_arch }} -DCMAKE_SYSTEM_NAME=Windows \
-                    -DCMAKE_EXE_LINKER_FLAGS=" ${{ matrix.lto_ldflags }} ${{ needs.vars.outputs.ld_flags }}" \
+                    -DCMAKE_EXE_LINKER_FLAGS=" ${{ matrix.lto_ldflags }} ${{ matrix.ldlibs }} ${{ needs.vars.outputs.ld_flags }}" \
                     -DCMAKE_C_FLAGS=" ${{ needs.vars.outputs.c_flags }}" \
                     -DCMAKE_CXX_FLAGS=" ${{ needs.vars.outputs.cxx_flags }}" \
                     -DRust_CARGO_TARGET=${{ matrix.rust_target }} -DRUST_BUILD_STD=${{ matrix.build_rust_std }} -DPREFER_STATIC_LINKING=ON \
