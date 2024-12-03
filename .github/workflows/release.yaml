@@ -81,7 +81,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
             name: Last CI build
-            target_commitish: dev
+            target_commitish: main
             tag_name: last-ci
             body_path: ${{ github.workspace }}/.github/__release_template.md
             draft: false
