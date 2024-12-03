@@ -1,4 +1,4 @@
-name: CI
+name: build_all
 on:
   workflow_dispatch:
     inputs:
