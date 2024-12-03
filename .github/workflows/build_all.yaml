@@ -480,7 +480,7 @@ jobs:
             strip: i686-w64-mingw32-strip
             ldlibs: "-lbcrypt"
             vcpkg_triplet: x86-mingw-static
-            rust_target: x86-pc-windows-gnullvm
+            rust_target: i686-pc-windows-gnullvm
             build_rust_std: "ON"
 
           - crt: ucrt
