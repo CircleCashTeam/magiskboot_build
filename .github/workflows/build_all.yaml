@@ -487,6 +487,42 @@ jobs:
           #  rust_target: i686-pc-windows-gnu
           #  build_rust_std: "OFF"
 
+          - crt: msvcrt
+            upload_suffix: "i686-standalone"
+            cmake_arch: x86
+            cc: i686-w64-mingw32-clang
+            cxx: i686-w64-mingw32-clang++
+            strip: i686-w64-mingw32-strip
+            ldlibs: "-lbcrypt"
+            vcpkg_triplet: x86-mingw-static
+            rust_target: i686-pc-windows-gnu
+            build_rust_std: "ON"
+
+          - crt: msvcrt
+            upload_suffix: "x86_64-standalone"
+            cmake_arch: x86_64
+            cc: x86_64-w64-mingw32-clang
+            cxx: x86_64-w64-mingw32-clang++
+            strip: x86_64-w64-mingw32-strip
+            ldlibs: "-lbcrypt"
+            vcpkg_triplet: x64-mingw-static
+            rust_target: x86_64-pc-windows-gnu
+            build_rust_std: "ON"
+
+          - crt: msvcrt
+            upload_suffix: "arm64-standalone"
+            cmake_arch: aarch64
+            cc: aarch64-w64-mingw32-clang
+            cxx: aarch64-w64-mingw32-clang++
+            strip: aarch64-w64-mingw32-strip
+
+            # XXX: what? why this wasn't detected by Corrosion automatically?
+            ldlibs: "-lbcrypt"
+
+            vcpkg_triplet: arm64-mingw-static
+            rust_target: aarch64-pc-windows-gnu
+            build_rust_std: "ON"
+
           - crt: ucrt
             upload_suffix: "i686-standalone"
             cmake_arch: x86
@@ -642,3 +678,111 @@ jobs:
         if: failure()
         uses: andymckay/cancel-action@0.4
 
+  build-wasm:
+    name: Build (WebAssembly)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    needs: [vars]
+    env:
+      vcpkg_triplet: "wasm32-emscripten"
+      emsdk_ver: 3.1.37
+      emsdk_cache_dir: "emsdk-cache"
+      rust_target: "wasm32-unknown-emscripten"
+      upload_suffix: "emscripten-wasm32-noderawfs-static"
+
+    steps:
+      - name: Prepare (Host)
+        run: |
+          sudo apt update
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y curl tar file \
+                        build-essential pkg-config cmake ninja-build
+
+      - name: Cache (Emscripten)
+        id: cache-emsdk-system-libs
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.emsdk_cache_dir }}
+          key: emsdk-${{ env.emsdk_ver }}-${{ runner.os }}
+
+      - name: Prepare (Emscripten)
+        uses: mymindstorm/setup-emsdk@v13
+        with:
+          version: ${{ env.emsdk_ver }}
+          actions-cache-folder: ${{ env.emsdk_cache_dir }}
+
+      - name: Prepare (Environment)
+        run: |
+          echo "vcpkg_root=$VCPKG_INSTALLATION_ROOT" | tee -a $GITHUB_ENV
+
+      - name: Cache (Cross)
+        id: cache-cross-vcpkgs
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.vcpkg_root }}/installed
+          key: cross-vcpkgs-v2-${{ env.vcpkg_triplet }}-emsdk-${{ env.emsdk_ver }}
+
+      - name: Prepare (Cross)
+        run: |
+          vcpkg install --host-triplet=${{ env.vcpkg_triplet }} \
+                        zlib liblzma lz4 'bzip2[core]'
+
+      - name: Prepare (Rust)
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain 1.77.2
+          . "$HOME/.cargo/env"
+          rustup target add ${{ env.rust_target }}
+
+      - name: Synchronize (source)
+        uses: yogeshlonkar/wait-for-jobs@v0.2.1
+        with:
+          jobs: 'Prepare (source)'
+
+      - name: Prepare (source)
+        uses: actions/download-artifact@v4
+        with:
+          name: srcpkg
+
+      - name: Build
+        run: |
+          echo -e "\n### extract source ###\n"
+          tar -xf magiskboot_*-src.tar.xz
+
+          cd magiskboot_*-src/
+
+          echo -e "\n### configure ###\n"
+          . "$HOME/.cargo/env"
+          emcmake cmake -G Ninja -B build -DCMAKE_EXE_LINKER_FLAGS=" ${{ needs.vars.outputs.lto_ldflags }} -sNODERAWFS  ${{ needs.vars.outputs.ld_flags }}" \
+              -DCMAKE_C_FLAGS=" ${{ needs.vars.outputs.c_flags }}" \
+              -DCMAKE_CXX_FLAGS=" ${{ needs.vars.outputs.cxx_flags }}" \
+              -DRust_CARGO_TARGET=${{ env.rust_target }} -DFULL_RUST_LTO=${{ needs.vars.outputs.full_lto }} \
+              -DCMAKE_BUILD_TYPE=${{ needs.vars.outputs.cmake_build_type }} -DPREFER_STATIC_LINKING=ON \
+              -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake \
+              -DVCPKG_TARGET_TRIPLET=${{ env.vcpkg_triplet }} \
+              -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$(dirname $(which emcc))/cmake/Modules/Platform/Emscripten.cmake"
+
+          echo -e "\n### build ###\n"
+          cmake --build build -j $(nproc) -v
+          emstrip build/magiskboot*.wasm
+
+          file build/magiskboot*
+          $EMSDK_NODE ./build/magiskboot*.js || true
+          rm -rf $GITHUB_WORKSPACE/${{ env.progname }}-out && mkdir -p $GITHUB_WORKSPACE/${{ env.progname }}-out
+          cp -afv build/magiskboot* $GITHUB_WORKSPACE/${{ env.progname }}-out
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          if-no-files-found: error
+          name: ${{ env.progname }}-${{ needs.vars.outputs.short_sha }}-${{ needs.vars.outputs.build_type }}-${{ env.upload_suffix }}
+          path: ${{ github.workspace }}/${{ env.progname }}-out/magiskboot*
+
+      - name: Check
+        run: |
+          cd magiskboot_*-src/
+          EMULATOR=$EMSDK_NODE ./scripts/magiskboot_test.sh $GITHUB_WORKSPACE/${{ env.progname }}-out/magiskboot*.js
+
+      # Fail fast
+      - name: Cancel other jobs
+        if: failure()
+        uses: andymckay/cancel-action@0.4
