@@ -509,20 +509,6 @@ jobs:
             rust_target: x86_64-pc-windows-gnu
             build_rust_std: "ON"
 
-          - crt: msvcrt
-            upload_suffix: "arm64-standalone"
-            cmake_arch: aarch64
-            cc: aarch64-w64-mingw32-clang
-            cxx: aarch64-w64-mingw32-clang++
-            strip: aarch64-w64-mingw32-strip
-
-            # XXX: what? why this wasn't detected by Corrosion automatically?
-            ldlibs: "-lbcrypt"
-
-            vcpkg_triplet: arm64-mingw-static
-            rust_target: aarch64-pc-windows-gnu
-            build_rust_std: "ON"
-
           - crt: ucrt
             upload_suffix: "i686-standalone"
             cmake_arch: x86
