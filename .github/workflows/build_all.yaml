@@ -487,28 +487,6 @@ jobs:
           #  rust_target: i686-pc-windows-gnu
           #  build_rust_std: "OFF"
 
-          - crt: msvcrt
-            upload_suffix: "i686-standalone"
-            cmake_arch: x86
-            cc: i686-w64-mingw32-clang
-            cxx: i686-w64-mingw32-clang++
-            strip: i686-w64-mingw32-strip
-            ldlibs: "-lbcrypt"
-            vcpkg_triplet: x86-mingw-static
-            rust_target: i686-pc-windows-gnu
-            build_rust_std: "ON"
-
-          - crt: msvcrt
-            upload_suffix: "x86_64-standalone"
-            cmake_arch: x86_64
-            cc: x86_64-w64-mingw32-clang
-            cxx: x86_64-w64-mingw32-clang++
-            strip: x86_64-w64-mingw32-strip
-            ldlibs: "-lbcrypt"
-            vcpkg_triplet: x64-mingw-static
-            rust_target: x86_64-pc-windows-gnu
-            build_rust_std: "ON"
-
           - crt: ucrt
             upload_suffix: "i686-standalone"
             cmake_arch: x86
