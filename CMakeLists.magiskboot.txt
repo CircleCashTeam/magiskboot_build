@@ -82,8 +82,8 @@ target_link_libraries(magiskboot_exe
     magiskboot-static
     LibLZMA::LibLZMA
     PkgConfig::liblz4
-    BZip2::BZip2
-    ZLIB::ZLIB
+#    BZip2::BZip2
+#    ZLIB::ZLIB
 #    libzopfli
     Threads::Threads)
 
