@@ -1,0 +1,56 @@
+From a2936163751dd6bd6c1e29f138fd0cf8aba71a18 Mon Sep 17 00:00:00 2001
+From: affggh <879632264@qq.com>
+Date: Sun, 13 Jul 2025 22:10:02 +0800
+Subject: [PATCH 7/8] drop rust funcs unused by magiskboot
+
+---
+ native/src/base/cstr.rs  | 4 ++++
+ native/src/base/files.rs | 4 ++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/native/src/base/cstr.rs b/native/src/base/cstr.rs
+index 72d74641e..18454b3c5 100644
+--- a/native/src/base/cstr.rs
++++ b/native/src/base/cstr.rs
+@@ -5,7 +5,10 @@ use std::cmp::{Ordering, min};
+ use std::ffi::{CStr, FromBytesWithNulError, OsStr};
+ use std::fmt::{Debug, Display, Formatter, Write};
+ use std::ops::Deref;
++
++#[cfg(unix)]
+ use std::os::unix::ffi::OsStrExt;
++
+ use std::path::{Path, PathBuf};
+ use std::str::Utf8Error;
+ use std::{fmt, mem, slice, str};
+@@ -110,6 +113,7 @@ impl StringExt for String {
+     }
+ }
+ 
++#[cfg(unix)]
+ impl StringExt for PathBuf {
+     #[allow(mutable_transmutes)]
+     fn nul_terminate(&mut self) -> &mut [u8] {
+diff --git a/native/src/base/files.rs b/native/src/base/files.rs
+index 87042f416..826b4b3c7 100644
+--- a/native/src/base/files.rs
++++ b/native/src/base/files.rs
+@@ -837,6 +837,8 @@ pub(crate) fn map_fd(fd: BorrowedFd, sz: usize, rw: bool) -> OsResult<'static, &
+     }
+ }
+ 
++cfg_if::cfg_if! {
++    if #[cfg(any(target_os = "android", target_os = "linux"))] {
+ #[allow(dead_code)]
+ pub struct MountInfo {
+     pub id: u32,
+@@ -914,4 +916,6 @@ pub fn parse_mount_info(pid: &str) -> Vec<MountInfo> {
+         });
+     }
+     res
++}
++    }
+ }
+-- 
+2.43.0
+

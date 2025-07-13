@@ -1,0 +1,53 @@
+From 0c3b8d4ef33b18fc4d8f7ba67ebfeadf7137a958 Mon Sep 17 00:00:00 2001
+From: Ookiineko <chiisaineko@protonmail.com>
+Date: Mon, 20 Mar 2023 01:42:32 +0800
+Subject: [PATCH 2/8] base: files: disable BLKGETSIZE for non-Linux
+
+- not actually useful to us
+
+Signed-off-by: Ookiineko <chiisaineko@protonmail.com>
+---
+ native/src/base/files.hpp | 2 ++
+ native/src/base/files.rs  | 6 ++++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/native/src/base/files.hpp b/native/src/base/files.hpp
+index 751347b6c..4b5c60247 100644
+--- a/native/src/base/files.hpp
++++ b/native/src/base/files.hpp
+@@ -21,8 +21,10 @@ static inline T align_padding(T v, int a) {
+ }
+ 
+ struct mmap_data : public byte_data {
++#ifdef __linux__
+     static_assert((sizeof(void *) == 8 && BLKGETSIZE64 == 0x80081272) ||
+                   (sizeof(void *) == 4 && BLKGETSIZE64 == 0x80041272));
++#endif
+     ALLOW_MOVE_ONLY(mmap_data)
+ 
+     explicit mmap_data(const char *name, bool rw = false);
+diff --git a/native/src/base/files.rs b/native/src/base/files.rs
+index 9704ad9d8..d14c4bb9b 100644
+--- a/native/src/base/files.rs
++++ b/native/src/base/files.rs
+@@ -725,11 +725,17 @@ pub(crate) fn map_file_at<'a>(
+     path: &'a Utf8CStr,
+     rw: bool,
+ ) -> OsResult<'a, &'static mut [u8]> {
++    cfg_if::cfg_if! {
++        if #[cfg(any(target_os = "linux", target_os = "android"))] {
+     #[cfg(target_pointer_width = "64")]
+     const BLKGETSIZE64: u32 = 0x80081272;
+ 
+     #[cfg(target_pointer_width = "32")]
+     const BLKGETSIZE64: u32 = 0x80041272;
++        } else {
++                // no-op
++        }
++    }
+ 
+     let flag = if rw { O_RDWR } else { O_RDONLY };
+     let fd = unsafe {
+-- 
+2.43.0
+

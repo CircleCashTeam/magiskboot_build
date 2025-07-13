@@ -21,7 +21,7 @@ add_library(libbase STATIC
     src/Magisk/native/src/base/files.cpp
     src/Magisk/native/src/base/misc.cpp
     src/Magisk/native/src/base/logging.cpp
-    src/Magisk/native/src/base/stream.cpp
+#    src/Magisk/native/src/base/stream.cpp
     src/Magisk/native/src/external/cxx-rs/src/cxx.cc
     src/magiskbase-rs-wrapper.cc)
 add_dependencies(libbase magiskboot-static)
@@ -50,28 +50,28 @@ else()
     target_link_libraries(libbase android_liblog)
 endif()
 
-add_library(libzopfli STATIC
-    src/Magisk/native/src/external/zopfli/src/zopfli/blocksplitter.c
-    src/Magisk/native/src/external/zopfli/src/zopfli/cache.c
-    src/Magisk/native/src/external/zopfli/src/zopfli/deflate.c
-    src/Magisk/native/src/external/zopfli/src/zopfli/gzip_container.c
-    src/Magisk/native/src/external/zopfli/src/zopfli/hash.c
-    src/Magisk/native/src/external/zopfli/src/zopfli/katajainen.c
-    src/Magisk/native/src/external/zopfli/src/zopfli/lz77.c
-    src/Magisk/native/src/external/zopfli/src/zopfli/squeeze.c
-    src/Magisk/native/src/external/zopfli/src/zopfli/tree.c
-    src/Magisk/native/src/external/zopfli/src/zopfli/util.c
-    src/Magisk/native/src/external/zopfli/src/zopfli/zlib_container.c
-    src/Magisk/native/src/external/zopfli/src/zopfli/zopfli_lib.c)
-target_include_directories(libzopfli PUBLIC
-    src/Magisk/native/src/external/zopfli/src)
-target_compile_options(libzopfli PRIVATE
-    -Werror -Wno-unused -Wno-unused-parameter)
+#add_library(libzopfli STATIC
+#    src/Magisk/native/src/external/zopfli/src/zopfli/blocksplitter.c
+#    src/Magisk/native/src/external/zopfli/src/zopfli/cache.c
+#    src/Magisk/native/src/external/zopfli/src/zopfli/deflate.c
+#    src/Magisk/native/src/external/zopfli/src/zopfli/gzip_container.c
+#    src/Magisk/native/src/external/zopfli/src/zopfli/hash.c
+#    src/Magisk/native/src/external/zopfli/src/zopfli/katajainen.c
+#    src/Magisk/native/src/external/zopfli/src/zopfli/lz77.c
+#    src/Magisk/native/src/external/zopfli/src/zopfli/squeeze.c
+#    src/Magisk/native/src/external/zopfli/src/zopfli/tree.c
+#    src/Magisk/native/src/external/zopfli/src/zopfli/util.c
+#    src/Magisk/native/src/external/zopfli/src/zopfli/zlib_container.c
+#    src/Magisk/native/src/external/zopfli/src/zopfli/zopfli_lib.c)
+#target_include_directories(libzopfli PUBLIC
+#    src/Magisk/native/src/external/zopfli/src)
+#target_compile_options(libzopfli PRIVATE
+#    -Werror -Wno-unused -Wno-unused-parameter)
 
 add_executable(magiskboot_exe
     src/Magisk/native/src/boot/main.cpp
     src/Magisk/native/src/boot/bootimg.cpp
-    src/Magisk/native/src/boot/compress.cpp
+#    src/Magisk/native/src/boot/compress.cpp
     src/Magisk/native/src/boot/format.cpp
     src/magiskboot-rs-wrapper.cc)
 add_dependencies(magiskboot_exe magiskboot-static)
@@ -84,7 +84,7 @@ target_link_libraries(magiskboot_exe
     PkgConfig::liblz4
     BZip2::BZip2
     ZLIB::ZLIB
-    libzopfli
+#    libzopfli
     Threads::Threads)
 
 include(GNUInstallDirs)

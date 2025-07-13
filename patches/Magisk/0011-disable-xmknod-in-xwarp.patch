@@ -1,0 +1,38 @@
+From 06979e07a0890c277d9b925b2b358003cb3b7388 Mon Sep 17 00:00:00 2001
+From: affggh <879632264@qq.com>
+Date: Sun, 13 Jul 2025 22:52:17 +0800
+Subject: [PATCH] disable xmknod in xwarp
+
+---
+ native/src/base/xwrap.hpp | 2 ++
+ native/src/base/xwrap.rs  | 1 +
+ 2 files changed, 3 insertions(+)
+
+diff --git a/native/src/base/xwrap.hpp b/native/src/base/xwrap.hpp
+index 5de6053d2..4fafeff53 100644
+--- a/native/src/base/xwrap.hpp
++++ b/native/src/base/xwrap.hpp
+@@ -44,6 +44,8 @@ ssize_t xsendfile(int out_fd, int in_fd, off_t *offset, size_t count);
+ pid_t xfork();
+ int xpoll(pollfd *fds, nfds_t nfds, int timeout);
+ ssize_t xrealpath(const char * __restrict__ path, char * __restrict__ buf, size_t bufsiz);
++#if 0
+ int xmknod(const char * pathname, mode_t mode, dev_t dev);
++#endif
+ 
+ } // extern "C"
+diff --git a/native/src/base/xwrap.rs b/native/src/base/xwrap.rs
+index 6b86f3e6a..0c4a68380 100644
+--- a/native/src/base/xwrap.rs
++++ b/native/src/base/xwrap.rs
+@@ -413,6 +413,7 @@ unsafe extern "C" fn xpoll(fds: *mut pollfd, nfds: nfds_t, timeout: i32) -> i32
+ }
+ 
+ #[unsafe(no_mangle)]
++#[cfg(not(target_os = "windows"))]
+ unsafe extern "C" fn xmknod(pathname: *const c_char, mode: mode_t, dev: dev_t) -> i32 {
+     unsafe {
+         libc::mknod(pathname, mode, dev)
+-- 
+2.43.0
+

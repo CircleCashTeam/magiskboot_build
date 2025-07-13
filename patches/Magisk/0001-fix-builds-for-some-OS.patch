@@ -1,21 +1,19 @@
-diff --git a/native/src/boot/cpio.rs b/native/src/boot/cpio.rs
-index d19ce29..0e36b4d 100644
---- a/native/src/boot/cpio.rs
-+++ b/native/src/boot/cpio.rs
-@@ -353,7 +353,7 @@ impl Cpio {
-                 FsPath::from(&buf).symlink_to(out)?;
-             }
-             S_IFBLK | S_IFCHR => {
--                let dev = makedev(entry.rdevmajor.try_into()?, entry.rdevminor.try_into()?);
-+                let dev = unsafe { makedev(entry.rdevmajor.try_into()?, entry.rdevminor.try_into()?) };
-                 unsafe { mknod(out.as_ptr().cast(), entry.mode, dev) };
-             }
-             _ => {
+From 6569d2187217e0a04ab43a0b65bf4743caead83e Mon Sep 17 00:00:00 2001
+From: affggh <879632264@qq.com>
+Date: Sun, 13 Jul 2025 21:16:31 +0800
+Subject: [PATCH 1/8] fix builds for some OS
+
+---
+ native/src/base/files.rs    |  2 +-
+ native/src/boot/bootimg.cpp | 17 +++++++++++++++++
+ native/src/boot/cpio.rs     |  2 +-
+ 3 files changed, 19 insertions(+), 2 deletions(-)
+
 diff --git a/native/src/base/files.rs b/native/src/base/files.rs
-index 6582eee..8678392 100644
+index 6c8b721b3..9704ad9d8 100644
 --- a/native/src/base/files.rs
 +++ b/native/src/base/files.rs
-@@ -206,7 +206,7 @@ impl FileAttr {
+@@ -152,7 +152,7 @@ impl FileAttr {
      #[inline(always)]
      #[allow(clippy::unnecessary_cast)]
      fn is(&self, mode: mode_t) -> bool {
@@ -25,10 +23,10 @@ index 6582eee..8678392 100644
  
      pub fn is_dir(&self) -> bool {
 diff --git a/native/src/boot/bootimg.cpp b/native/src/boot/bootimg.cpp
-index f853e61..1f6b2dc 100644
+index 61ad88107..e2000bc90 100644
 --- a/native/src/boot/bootimg.cpp
 +++ b/native/src/boot/bootimg.cpp
-@@ -16,6 +16,23 @@
+@@ -11,6 +11,23 @@
  
  using namespace std;
  
@@ -52,3 +50,19 @@ index f853e61..1f6b2dc 100644
  #define PADDING 15
  #define SHA256_DIGEST_SIZE 32
  #define SHA_DIGEST_SIZE 20
+diff --git a/native/src/boot/cpio.rs b/native/src/boot/cpio.rs
+index bfca2701a..584acb08a 100644
+--- a/native/src/boot/cpio.rs
++++ b/native/src/boot/cpio.rs
+@@ -366,7 +366,7 @@ impl Cpio {
+                 out.create_symlink_to(&buf)?;
+             }
+             S_IFBLK | S_IFCHR => {
+-                let dev = makedev(entry.rdevmajor.try_into()?, entry.rdevminor.try_into()?);
++                let dev = unsafe { makedev(entry.rdevmajor.try_into()?, entry.rdevminor.try_into()?) };
+                 unsafe { mknod(out.as_ptr().cast(), entry.mode, dev) };
+             }
+             _ => {
+-- 
+2.43.0
+

@@ -1,0 +1,32 @@
+From 9a2a1451d38fe8ddfa54a29059527dded309d71f Mon Sep 17 00:00:00 2001
+From: affggh <879632264@qq.com>
+Date: Sun, 13 Jul 2025 22:40:57 +0800
+Subject: [PATCH] fix payload header include issue
+
+---
+ native/src/boot/payload.rs | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/native/src/boot/payload.rs b/native/src/boot/payload.rs
+index e6cf7c423..4b8409523 100644
+--- a/native/src/boot/payload.rs
++++ b/native/src/boot/payload.rs
+@@ -3,9 +3,14 @@ use quick_protobuf::{BytesReader, MessageRead};
+ use std::{
+     fs::File,
+     io::{BufReader, Read, Seek, SeekFrom, Write},
+-    os::fd::FromRawFd,
+ };
+ 
++#[cfg(not(target = "windows"))]
++use std::os::fd::FromRawFd;
++
++#[cfg(target = "windows")]
++use winsup::fd::FromRawFd;
++
+ use crate::compress::get_decoder;
+ use crate::ffi::check_fmt;
+ use crate::proto::update_metadata::{DeltaArchiveManifest, mod_InstallOperation::Type};
+-- 
+2.43.0
+

@@ -1,7 +1,7 @@
-From 7f4f80f0d520abb0fdf25a02bdc656f66fb5b797 Mon Sep 17 00:00:00 2001
+From 760bfe5f42add90133b773dcf2b377cf7b847541 Mon Sep 17 00:00:00 2001
 From: Ookiineko <chiisaineko@protonmail.com>
 Date: Tue, 9 Apr 2024 00:45:17 +0800
-Subject: [PATCH] workaround UTF-8 issues on Windows
+Subject: [PATCH 8/8] workaround UTF-8 issues on Windows
 
 Signed-off-by: Ookiineko <chiisaineko@protonmail.com>
 ---
@@ -9,10 +9,10 @@ Signed-off-by: Ookiineko <chiisaineko@protonmail.com>
  1 file changed, 2 insertions(+)
 
 diff --git a/native/src/base/cstr.rs b/native/src/base/cstr.rs
-index d93db87..4bbbeb9 100644
+index 18454b3c5..e85a9bc83 100644
 --- a/native/src/base/cstr.rs
 +++ b/native/src/base/cstr.rs
-@@ -312,7 +312,9 @@ pub struct Utf8CStr([u8]);
+@@ -271,7 +271,9 @@ pub struct Utf8CStr([u8]);
  impl Utf8CStr {
      pub fn from_cstr(cstr: &CStr) -> Result<&Utf8CStr, StrErr> {
          // Validate the buffer during construction
@@ -23,5 +23,5 @@ index d93db87..4bbbeb9 100644
      }
  
 -- 
-2.44.0
+2.43.0
 

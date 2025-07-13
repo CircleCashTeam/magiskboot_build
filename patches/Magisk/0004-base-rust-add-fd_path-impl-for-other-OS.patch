@@ -1,28 +1,39 @@
-From 18d027606fe53bbb25fc3faa9cd4c5593af4427d Mon Sep 17 00:00:00 2001
-From: Ookiineko <chiisaineko@protonmail.com>
-Date: Mon, 20 Mar 2023 03:51:40 +0800
-Subject: [PATCH] base: rust: add fd_path impl for other OS
+From 9cce40b474cc8ba1c3d8ca647a30d390dbd66eb6 Mon Sep 17 00:00:00 2001
+From: affggh <879632264@qq.com>
+Date: Sun, 13 Jul 2025 21:26:47 +0800
+Subject: [PATCH 4/8] base rust add fd_path impl for other OS
 
-Signed-off-by: Ookiineko <chiisaineko@protonmail.com>
 ---
- native/src/base/files.rs   | 17 +++++++++++++++++
- native/src/base/Cargo.toml | 3  +++
- 2 file changed, 20 insertions(+)
+ native/src/base/Cargo.toml |  3 +++
+ native/src/base/files.rs   | 46 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 49 insertions(+)
 
+diff --git a/native/src/base/Cargo.toml b/native/src/base/Cargo.toml
+index 5a1c843d5..8c40d4fa5 100644
+--- a/native/src/base/Cargo.toml
++++ b/native/src/base/Cargo.toml
+@@ -23,3 +23,6 @@ bytemuck = { workspace = true }
+ num-traits = { workspace = true }
+ num-derive = { workspace = true }
+ const_format = { workspace = true }
++
++[target.'cfg(target_os = "windows")'.dependencies]
++filepath = "0.1.2"
 diff --git a/native/src/base/files.rs b/native/src/base/files.rs
-index 892d375..25ed2e7 100644
+index d14c4bb9b..339d9edfb 100644
 --- a/native/src/base/files.rs
 +++ b/native/src/base/files.rs
-@@ -45,12 +45,58 @@ pub fn readlink(path: &Utf8CStr, data: &mut [u8]) -> io::Result<usize> {
-     };
+@@ -127,6 +127,8 @@ fn open_fd(path: &Utf8CStr, flags: i32, mode: mode_t) -> OsResult<OwnedFd> {
+     }
  }
  
 +#[cfg(any(target_os = "android", target_os = "linux",
 +          target_os = "cygwin", target_os = "emscripten"))]
- pub fn fd_path(fd: RawFd, buf: &mut dyn Utf8CStrBuf) -> io::Result<()> {
-     let mut arr = Utf8CStrBufArr::<40>::new();
-     let path = FsPathBuf::new(&mut arr).join("/proc/self/fd").join_fmt(fd);
-     path.read_link(buf)
+ pub fn fd_path(fd: RawFd, buf: &mut dyn Utf8CStrBuf) -> OsResult<'static, ()> {
+     let path = cstr::buf::new::<64>()
+         .join_path("/proc/self/fd")
+@@ -134,6 +136,50 @@ pub fn fd_path(fd: RawFd, buf: &mut dyn Utf8CStrBuf) -> OsResult<'static, ()> {
+     path.read_link(buf).map_err(|e| e.set_args(None, None))
  }
  
 +#[cfg(target_vendor = "apple")]
@@ -69,20 +80,9 @@ index 892d375..25ed2e7 100644
 +   }
 +}
 +
- pub trait ReadExt {
-     fn skip(&mut self, len: usize) -> io::Result<()>;
-     fn read_pod<F: Pod>(&mut self, data: &mut F) -> io::Result<()>;
-diff --git a/native/src/base/Cargo.toml b/native/src/base/Cargo.toml
-index bfb8e57..f89abca 100644
---- a/native/src/base/Cargo.toml
-+++ b/native/src/base/Cargo.toml
-@@ -15,3 +15,6 @@ bytemuck = { workspace = true }
- num-traits = { workspace = true }
- num-derive = { workspace = true }
- const_format = { workspace = true }
-+
-+[target.'cfg(target_os = "windows")'.dependencies]
-+filepath = "0.1.2"
---
-2.40.0
+ pub struct FileAttr {
+     pub st: libc::stat,
+     #[cfg(feature = "selinux")]
+-- 
+2.43.0
 

@@ -1,0 +1,128 @@
+From ad0ccbbf29d2db23d44ccba80683d13c4dad585f Mon Sep 17 00:00:00 2001
+From: affggh <879632264@qq.com>
+Date: Sun, 13 Jul 2025 21:39:37 +0800
+Subject: [PATCH 5/8] disable libc funcs not used by magiskboot
+
+---
+ native/src/base/include/base.hpp |  2 ++
+ native/src/base/lib.rs           |  2 ++
+ native/src/base/misc.cpp         | 10 ++++++++++
+ native/src/base/xwrap.rs         |  6 ++++++
+ 4 files changed, 20 insertions(+)
+
+diff --git a/native/src/base/include/base.hpp b/native/src/base/include/base.hpp
+index c2888fd76..81bad4cb0 100644
+--- a/native/src/base/include/base.hpp
++++ b/native/src/base/include/base.hpp
+@@ -6,6 +6,8 @@
+ #include "../logging.hpp"
+ #include "../base-rs.hpp"
+ 
++#ifdef __linux__
+ using rust::xpipe2;
++#endif
+ using rust::fd_path;
+ using kv_pairs = std::vector<std::pair<std::string, std::string>>;
+diff --git a/native/src/base/lib.rs b/native/src/base/lib.rs
+index d5e492a87..e5b572ccd 100644
+--- a/native/src/base/lib.rs
++++ b/native/src/base/lib.rs
+@@ -60,7 +60,9 @@ pub mod ffi {
+ 
+     #[namespace = "rust"]
+     extern "Rust" {
++        #[cfg(any(target_os = "linux", target_os = "android"))]
+         fn xpipe2(fds: &mut [i32; 2], flags: i32) -> i32;
++        
+         #[cxx_name = "fd_path"]
+         fn fd_path_for_cxx(fd: i32, buf: &mut [u8]) -> isize;
+         #[cxx_name = "map_file"]
+diff --git a/native/src/base/misc.cpp b/native/src/base/misc.cpp
+index b12815cb4..3ad56f6f1 100644
+--- a/native/src/base/misc.cpp
++++ b/native/src/base/misc.cpp
+@@ -79,11 +79,19 @@ int fork_no_orphan() {
+ #endif
+ 
+ int exec_command(exec_t &exec) {
++#ifdef __linux__
+     auto pipefd = array<int, 2>{-1, -1};
++#else
++    int pipefd[2] = {-1, -1};
++#endif
+     int outfd = -1;
+ 
+     if (exec.fd == -1) {
++#ifdef __linux__
+         if (xpipe2(pipefd, O_CLOEXEC) == -1)
++#else
++        if (pipe(pipefd) == -1)
++#endif
+             return -1;
+         outfd = pipefd[1];
+     } else if (exec.fd >= 0) {
+@@ -155,7 +163,9 @@ void init_argv0(int argc, char **argv) {
+ void set_nice_name(const char *name) {
+     memset(argv0, 0, name_len);
+     strscpy(argv0, name, name_len);
++#if 0
+     prctl(PR_SET_NAME, name);
++#endif
+ }
+ 
+ template<typename T, int base>
+diff --git a/native/src/base/xwrap.rs b/native/src/base/xwrap.rs
+index 273fd4ce6..3de9aa809 100644
+--- a/native/src/base/xwrap.rs
++++ b/native/src/base/xwrap.rs
+@@ -137,6 +137,7 @@ unsafe extern "C" fn xxread(fd: RawFd, buf: *mut u8, bufsz: usize) -> isize {
+         .map_or(-1, |_| data.len() as isize)
+ }
+ 
++#[cfg(any(target_os = "linux", target_os = "android"))]
+ pub(crate) fn xpipe2(fds: &mut [i32; 2], flags: i32) -> i32 {
+     unsafe {
+         libc::pipe2(fds.as_mut_ptr(), flags)
+@@ -147,6 +148,7 @@ pub(crate) fn xpipe2(fds: &mut [i32; 2], flags: i32) -> i32 {
+ }
+ 
+ #[unsafe(no_mangle)]
++#[cfg(any(target_os = "linux", target_os = "android"))]
+ extern "C" fn xsetns(fd: RawFd, nstype: i32) -> i32 {
+     unsafe {
+         libc::setns(fd, nstype)
+@@ -157,6 +159,7 @@ extern "C" fn xsetns(fd: RawFd, nstype: i32) -> i32 {
+ }
+ 
+ #[unsafe(no_mangle)]
++#[cfg(any(target_os = "linux", target_os = "android"))]
+ extern "C" fn xunshare(flags: i32) -> i32 {
+     unsafe {
+         libc::unshare(flags)
+@@ -236,6 +239,7 @@ extern "C" fn xlisten(socket: i32, backlog: i32) -> i32 {
+ }
+ 
+ #[unsafe(no_mangle)]
++#[cfg(any(target_os = "linux", target_os = "android"))]
+ unsafe extern "C" fn xaccept4(
+     sockfd: RawFd,
+     addr: *mut sockaddr,
+@@ -301,6 +305,7 @@ unsafe extern "C" fn xsymlink(target: *const c_char, linkpath: *const c_char) ->
+ }
+ 
+ #[unsafe(no_mangle)]
++#[cfg(any(target_os = "linux", target_os = "android"))]
+ unsafe extern "C" fn xmount(
+     src: *const c_char,
+     target: *const c_char,
+@@ -317,6 +322,7 @@ unsafe extern "C" fn xmount(
+ }
+ 
+ #[unsafe(no_mangle)]
++#[cfg(any(target_os = "linux", target_os = "android"))]
+ unsafe extern "C" fn xumount2(target: *const c_char, flags: i32) -> i32 {
+     unsafe {
+         libc::umount2(target, flags)
+-- 
+2.43.0
+

@@ -1,0 +1,396 @@
+From a7485e692d3e84fe35b39cd70e987973ce2386db Mon Sep 17 00:00:00 2001
+From: affggh <879632264@qq.com>
+Date: Sun, 13 Jul 2025 22:07:36 +0800
+Subject: [PATCH 6/8] fix build err on MinGW
+
+---
+ native/src/Cargo.toml         | 12 ++----------
+ native/src/base/Cargo.toml    |  3 ++-
+ native/src/base/cxx_extern.rs | 12 ++++++++++++
+ native/src/base/dir.rs        | 12 ++++++++++++
+ native/src/base/files.cpp     | 29 +++++++++++++++++++++++++++++
+ native/src/base/files.hpp     |  4 ++++
+ native/src/base/files.rs      |  7 +++++++
+ native/src/base/misc.cpp      | 27 +++++++++++++++++++++++++++
+ native/src/base/misc.hpp      |  6 ++++++
+ native/src/base/xwrap.rs      | 15 +++++++++++++++
+ native/src/boot/Cargo.toml    |  3 +++
+ native/src/boot/bootimg.cpp   |  7 +++++++
+ 12 files changed, 126 insertions(+), 11 deletions(-)
+
+diff --git a/native/src/Cargo.toml b/native/src/Cargo.toml
+index 8191f35a5..365c12d71 100644
+--- a/native/src/Cargo.toml
++++ b/native/src/Cargo.toml
+@@ -1,6 +1,6 @@
+ [workspace]
+ exclude = ["external"]
+-members = ["base", "boot", "core", "core/derive", "init", "sepolicy"]
++members = ["base", "boot"]
+ resolver = "2"
+ 
+ [workspace.package]
+@@ -10,7 +10,7 @@ edition = "2024"
+ [workspace.dependencies]
+ cxx = { path = "external/cxx-rs" }
+ cxx-gen = { path = "external/cxx-rs/gen/lib" }
+-libc = "0.2.174"
++libc = { path = "../../../../src/libc-compat/rs" }
+ cfg-if = "1.0.1"
+ num-traits = "0.2.19"
+ num-derive = "0.4.2"
+@@ -50,14 +50,6 @@ quick-protobuf = { git = "https://github.com/tafia/quick-protobuf.git" }
+ lz4-sys = { path = "external/lz4-sys" }
+ lzma-sys = { path = "external/lzma-sys" }
+ 
+-[profile.dev]
+-opt-level = "z"
+-lto = "thin"
+-panic = "abort"
+-
+ [profile.release]
+-opt-level = "z"
+-lto = "fat"
+ codegen-units = 1
+-panic = "abort"
+ strip = true
+diff --git a/native/src/base/Cargo.toml b/native/src/base/Cargo.toml
+index 8c40d4fa5..9af8a98c7 100644
+--- a/native/src/base/Cargo.toml
++++ b/native/src/base/Cargo.toml
+@@ -24,5 +24,6 @@ num-traits = { workspace = true }
+ num-derive = { workspace = true }
+ const_format = { workspace = true }
+ 
+-[target.'cfg(target_os = "windows")'.dependencies]
++[target.'cfg(windows)'.dependencies]
+ filepath = "0.1.2"
++winsup = { path = "../../../../../src/winsup-rs" }
+diff --git a/native/src/base/cxx_extern.rs b/native/src/base/cxx_extern.rs
+index 8b4fae3fb..25e3a1d01 100644
+--- a/native/src/base/cxx_extern.rs
++++ b/native/src/base/cxx_extern.rs
+@@ -1,7 +1,11 @@
+ // Functions in this file are only for exporting to C++, DO NOT USE IN RUST
+ 
++#[cfg(not(target_os = "windows"))]
+ use std::os::fd::{BorrowedFd, OwnedFd, RawFd};
+ 
++#[cfg(target_os = "windows")]
++use winsup::fd::{BorrowedFd, OwnedFd, RawFd};
++
+ use cfg_if::cfg_if;
+ use libc::{c_char, mode_t};
+ 
+@@ -76,9 +80,17 @@ pub(crate) fn map_file_at_for_cxx(fd: RawFd, path: &Utf8CStr, rw: bool) -> &'sta
+ 
+ pub(crate) fn map_fd_for_cxx(fd: RawFd, sz: usize, rw: bool) -> &'static mut [u8] {
+     unsafe {
++        cfg_if::cfg_if! {
++            if #[cfg(not(target_os = "windows"))] {
+         map_fd(BorrowedFd::borrow_raw(fd), sz, rw)
+             .log_cxx()
+             .unwrap_or(&mut [])
++            } else {
++                map_fd(BorrowedFd::borrow_raw(libc::get_osfhandle(fd) as *mut libc::c_void), sz, rw)
++                    .log_cxx()
++                    .unwrap_or(&mut [])
++            }
++        }
+     }
+ }
+ 
+diff --git a/native/src/base/dir.rs b/native/src/base/dir.rs
+index deda93f6a..be4d5114f 100644
+--- a/native/src/base/dir.rs
++++ b/native/src/base/dir.rs
+@@ -7,7 +7,13 @@ use libc::{EEXIST, O_CLOEXEC, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, dirent, mode
+ use std::fs::File;
+ use std::marker::PhantomData;
+ use std::ops::{Deref, DerefMut};
++
++#[cfg(not(target_os = "windows"))]
+ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
++
++#[cfg(target_os = "windows")]
++use winsup::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
++
+ use std::ptr::NonNull;
+ use std::{mem, slice};
+ 
+@@ -481,9 +487,15 @@ impl AsRawFd for Directory {
+ }
+ 
+ impl AsFd for Directory {
++    #[cfg(not(target_os = "windows"))]
+     fn as_fd(&self) -> BorrowedFd {
+         unsafe { BorrowedFd::borrow_raw(self.as_raw_fd()) }
+     }
++
++    #[cfg(target_os = "windows")]
++    fn as_fd(&self) -> BorrowedFd {
++        unsafe { BorrowedFd::borrow_raw(libc::get_osfhandle(self.as_raw_fd()) as *mut libc::c_void) }
++    }
+ }
+ 
+ impl Drop for Directory {
+diff --git a/native/src/base/files.cpp b/native/src/base/files.cpp
+index 182157941..1369a204b 100644
+--- a/native/src/base/files.cpp
++++ b/native/src/base/files.cpp
+@@ -1,8 +1,37 @@
++#ifdef _WIN32
++#  include <mman.h>
++#else
+ #include <sys/mman.h>
++#endif
++#ifdef __linux__
+ #include <sys/sendfile.h>
+ #include <linux/fs.h>
++#else
++#  include <sys/types.h>
++#  if defined(__APPLE__)
++#    include <sys/disk.h>
++#  endif
++#endif
++#ifndef _WIN32
++#  include <sys/ioctl.h>
++#endif
+ #include <fcntl.h>
+ #include <unistd.h>
++#ifdef _WIN32
++#  define O_CLOEXEC O_NOINHERIT
++
++#  include <getline.h>
++#  include <winsup/acl_compat.h>
++#  include <winsup/at_compat.h>
++#  include <winsup/dirent_compat.h>
++#  include <winsup/mknod_compat.h>
++#  include <winsup/stat_compat.h>
++
++#  define dirent _dirent_stub
++#  define getline msvc_getline
++#elif defined(__EMSCRIPTEN__)
++#  include <emsup/mkdev_stubs.h>
++#endif
+ 
+ #include <base.hpp>
+ 
+diff --git a/native/src/base/files.hpp b/native/src/base/files.hpp
+index 4b5c60247..141baa13c 100644
+--- a/native/src/base/files.hpp
++++ b/native/src/base/files.hpp
+@@ -66,7 +66,11 @@ void parse_prop_file(const char *file,
+ std::string resolve_preinit_dir(const char *base_dir);
+ 
+ using sFILE = std::unique_ptr<FILE, decltype(&fclose)>;
++#ifdef _WIN32
++using sDIR = std::unique_ptr<DIR, int (*)(DIR*)>;
++#else
+ using sDIR = std::unique_ptr<DIR, decltype(&closedir)>;
++#endif
+ sDIR make_dir(DIR *dp);
+ sFILE make_file(FILE *fp);
+ 
+diff --git a/native/src/base/files.rs b/native/src/base/files.rs
+index 339d9edfb..87042f416 100644
+--- a/native/src/base/files.rs
++++ b/native/src/base/files.rs
+@@ -14,9 +14,16 @@ use std::ffi::CStr;
+ use std::fmt::Display;
+ use std::fs::File;
+ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
++cfg_if::cfg_if! {
++if #[cfg(not(target_os = "windows"))] {
+ use std::os::fd::{AsFd, BorrowedFd};
+ use std::os::unix::ffi::OsStrExt;
+ use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
++} else {
++use winsup::fd::{AsFd, BorrowedFd, IntoRawFd};
++use winsup::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
++}
++}
+ use std::path::Path;
+ use std::{io, mem, ptr, slice};
+ 
+diff --git a/native/src/base/misc.cpp b/native/src/base/misc.cpp
+index 3ad56f6f1..76fc38d70 100644
+--- a/native/src/base/misc.cpp
++++ b/native/src/base/misc.cpp
+@@ -1,11 +1,36 @@
+ #include <sys/types.h>
++#ifndef _WIN32
+ #include <sys/wait.h>
++#endif
++#ifdef __linux__
+ #include <sys/prctl.h>
++#else
++#  include <sys/types.h>
++#endif
+ #include <fcntl.h>
+ #include <unistd.h>
++#ifdef __APPLE__
++#  define environ (*_NSGetEnviron())
++
++#  include <crt_externs.h>
++#  include <sys/syscall.h>
++#endif
++#ifdef __linux__
+ #include <syscall.h>
++#else
++#  include <pthread.h>
++#  ifndef _WIN32
++#    include <signal.h>
++#  endif
++#endif
+ #include <random>
+ #include <string>
++#ifdef _WIN32
++#  include <winsup/str_compat.h>
++#endif
++#ifndef HAVE_STRLCPY
++#  include <libbsd/str_compat.h>
++#endif
+ 
+ #include <base.hpp>
+ 
+@@ -56,6 +81,7 @@ rust::Vec<size_t> mut_u8_patch(
+     return data.patch(from, to);
+ }
+ 
++#ifndef _WIN32
+ int fork_dont_care() {
+     if (int pid = xfork()) {
+         waitpid(pid, nullptr, 0);
+@@ -140,6 +166,7 @@ int exec_command_sync(exec_t &exec) {
+     waitpid(pid, &status, 0);
+     return WEXITSTATUS(status);
+ }
++#endif
+ 
+ int new_daemon_thread(thread_entry entry, void *arg) {
+     pthread_t thread;
+diff --git a/native/src/base/misc.hpp b/native/src/base/misc.hpp
+index ebd3de1fb..d432c223f 100644
+--- a/native/src/base/misc.hpp
++++ b/native/src/base/misc.hpp
+@@ -228,10 +228,15 @@ struct exec_t {
+     bool err = false;
+     int fd = -2;
+     void (*pre_exec)() = nullptr;
++#ifdef _WIN32
++    int (*fork)() = nullptr;
++#else
+     int (*fork)() = xfork;
++#endif
+     const char **argv = nullptr;
+ };
+ 
++#ifndef _WIN32
+ int exec_command(exec_t &exec);
+ template <class ...Args>
+ int exec_command(exec_t &exec, Args &&...args) {
+@@ -260,6 +265,7 @@ void exec_command_async(Args &&...args) {
+     };
+     exec_command(exec);
+ }
++#endif
+ 
+ template <typename T>
+ constexpr auto operator+(T e) noexcept ->
+diff --git a/native/src/base/xwrap.rs b/native/src/base/xwrap.rs
+index 3de9aa809..6b86f3e6a 100644
+--- a/native/src/base/xwrap.rs
++++ b/native/src/base/xwrap.rs
+@@ -11,8 +11,16 @@ use std::ffi::CStr;
+ use std::fs::File;
+ use std::io::{Read, Write};
+ use std::mem::ManuallyDrop;
++
++#[cfg(not(target_os = "windows"))]
+ use std::os::fd::FromRawFd;
++
++#[cfg(not(target_os = "windows"))]
+ use std::os::unix::io::RawFd;
++
++#[cfg(target_os = "windows")]
++use winsup::fd::{RawFd, FromRawFd};
++
+ use std::ptr;
+ use std::ptr::NonNull;
+ 
+@@ -199,6 +207,8 @@ unsafe extern "C" fn xreaddir(mut dir: BorrowedDirectory) -> *mut libc::dirent {
+ }
+ 
+ #[unsafe(no_mangle)]
++cfg_if::cfg_if! {
++if #[cfg(not(target_os = "windows"))] {
+ extern "C" fn xsetsid() -> i32 {
+     unsafe {
+         libc::setsid()
+@@ -219,6 +229,7 @@ extern "C" fn xsocket(domain: i32, ty: i32, protocol: i32) -> RawFd {
+ }
+ 
+ #[unsafe(no_mangle)]
++#[cfg(not(target_os = "windows"))]
+ unsafe extern "C" fn xbind(socket: i32, address: *const sockaddr, len: socklen_t) -> i32 {
+     unsafe {
+         libc::bind(socket, address, len)
+@@ -331,6 +342,8 @@ unsafe extern "C" fn xumount2(target: *const c_char, flags: i32) -> i32 {
+             .unwrap_or(-1)
+     }
+ }
++}
++}
+ 
+ #[unsafe(no_mangle)]
+ unsafe extern "C" fn xrename(oldname: *const c_char, newname: *const c_char) -> i32 {
+@@ -378,6 +391,7 @@ unsafe extern "C" fn xsendfile(
+ }
+ 
+ #[unsafe(no_mangle)]
++#[cfg(not(target_os = "windows"))]
+ extern "C" fn xfork() -> i32 {
+     unsafe {
+         libc::fork()
+@@ -388,6 +402,7 @@ extern "C" fn xfork() -> i32 {
+ }
+ 
+ #[unsafe(no_mangle)]
++#[cfg(not(target_os = "windows"))]
+ unsafe extern "C" fn xpoll(fds: *mut pollfd, nfds: nfds_t, timeout: i32) -> i32 {
+     unsafe {
+         libc::poll(fds, nfds, timeout)
+diff --git a/native/src/boot/Cargo.toml b/native/src/boot/Cargo.toml
+index f20050597..ee84da78b 100644
+--- a/native/src/boot/Cargo.toml
++++ b/native/src/boot/Cargo.toml
+@@ -35,3 +35,6 @@ bzip2 = { workspace = true }
+ lz4 = { workspace = true }
+ xz2 = { workspace = true }
+ zopfli = { workspace = true, features = ["gzip"] }
++
++[target.'cfg(windows)'.dependencies]
++winsup = { path = "../../../../../src/winsup-rs" }
+\ No newline at end of file
+diff --git a/native/src/boot/bootimg.cpp b/native/src/boot/bootimg.cpp
+index e2000bc90..2824e0c15 100644
+--- a/native/src/boot/bootimg.cpp
++++ b/native/src/boot/bootimg.cpp
+@@ -3,6 +3,13 @@
+ #include <memory>
+ #include <span>
+ 
++#ifdef _WIN32
++#  define O_CLOEXEC O_NOINHERIT
++
++#  include <winsup/str_compat.h>
++#  include <winsup/getpagesize_compat.h>
++#endif
++
+ #include <base.hpp>
+ 
+ #include "boot-rs.hpp"
+-- 
+2.43.0
+

@@ -1,0 +1,48 @@
+From 544daf54721a091702ee72a845e6eb8df8b3e346 Mon Sep 17 00:00:00 2001
+From: affggh <879632264@qq.com>
+Date: Sun, 13 Jul 2025 21:23:42 +0800
+Subject: [PATCH 3/8] disable funcs not used by magiskboot
+
+---
+ native/src/base/misc.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/native/src/base/misc.cpp b/native/src/base/misc.cpp
+index 39fc53657..b12815cb4 100644
+--- a/native/src/base/misc.cpp
++++ b/native/src/base/misc.cpp
+@@ -66,6 +66,7 @@ int fork_dont_care() {
+     return 0;
+ }
+ 
++#ifdef __linux__
+ int fork_no_orphan() {
+     int pid = xfork();
+     if (pid)
+@@ -75,6 +76,7 @@ int fork_no_orphan() {
+         exit(1);
+     return 0;
+ }
++#endif
+ 
+ int exec_command(exec_t &exec) {
+     auto pipefd = array<int, 2>{-1, -1};
+@@ -188,6 +190,7 @@ uint32_t parse_uint32_hex(string_view s) {
+     return parse_num<uint32_t, 16>(s);
+ }
+ 
++#ifdef __linux__
+ int switch_mnt_ns(int pid) {
+     int ret = -1;
+     int fd = syscall(__NR_pidfd_open, pid, 0);
+@@ -207,6 +210,7 @@ int switch_mnt_ns(int pid) {
+     }
+     return ret;
+ }
++#endif
+ 
+ string &replace_all(string &str, string_view from, string_view to) {
+     size_t pos = 0;
+-- 
+2.43.0
+
