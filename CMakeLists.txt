@@ -99,8 +99,8 @@ if (NOT WITHOUT_BUILD)
     find_package(Threads REQUIRED)
     find_package(LibLZMA REQUIRED)
     pkg_check_modules(liblz4 REQUIRED IMPORTED_TARGET liblz4)
-    find_package(BZip2 REQUIRED)
-    find_package(ZLIB REQUIRED)
+    #find_package(BZip2 REQUIRED)
+    #find_package(ZLIB REQUIRED)
 
     add_compile_options(-Wall)
 
