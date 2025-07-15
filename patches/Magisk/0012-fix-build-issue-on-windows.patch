@@ -1,0 +1,435 @@
+From a4e8294664686fa2c31f78926367c072b46d9c14 Mon Sep 17 00:00:00 2001
+From: affggh <879632264@qq.com>
+Date: Mon, 14 Jul 2025 11:00:32 +0800
+Subject: [PATCH] fix base build issue on windows
+
+fix base build issue on windows
+
+make source fit windows
+
+map_file_at drop dirfd
+---
+ native/src/base/cxx_extern.rs |  8 +++
+ native/src/base/files.hpp     |  2 +
+ native/src/base/files.rs      | 98 +++++++++++++++++++++++++++--------
+ native/src/base/lib.rs        |  7 ++-
+ native/src/base/xwrap.hpp     |  8 +++
+ native/src/base/xwrap.rs      |  2 +-
+ native/src/boot/compress.rs   |  6 +++
+ native/src/boot/cpio.rs       |  2 +
+ native/src/boot/payload.rs    |  4 +-
+ 9 files changed, 112 insertions(+), 25 deletions(-)
+
+diff --git a/native/src/base/cxx_extern.rs b/native/src/base/cxx_extern.rs
+index 25e3a1d01..57d2986ca 100644
+--- a/native/src/base/cxx_extern.rs
++++ b/native/src/base/cxx_extern.rs
+@@ -72,9 +72,17 @@ pub(crate) fn map_file_for_cxx(path: &Utf8CStr, rw: bool) -> &'static mut [u8] {
+ 
+ pub(crate) fn map_file_at_for_cxx(fd: RawFd, path: &Utf8CStr, rw: bool) -> &'static mut [u8] {
+     unsafe {
++        cfg_if::cfg_if! {
++            if #[cfg(not(target_os = "windows"))] {
+         map_file_at(BorrowedFd::borrow_raw(fd), path, rw)
+             .log_cxx()
+             .unwrap_or(&mut [])
++            } else {
++                map_file_at(BorrowedFd::borrow_raw(libc::get_osfhandle(fd) as *mut libc::c_void), path, rw)
++                    .log_cxx()
++                    .unwrap_or(&mut [])
++            }
++        }
+     }
+ }
+ 
+diff --git a/native/src/base/files.hpp b/native/src/base/files.hpp
+index 141baa13c..6b2948371 100644
+--- a/native/src/base/files.hpp
++++ b/native/src/base/files.hpp
+@@ -6,7 +6,9 @@
+ #include <string>
+ #include <vector>
+ 
++#ifndef _WIN32
+ #include <linux/fs.h>
++#endif
+ #include "misc.hpp"
+ 
+ template <typename T>
+diff --git a/native/src/base/files.rs b/native/src/base/files.rs
+index 826b4b3c7..5dd741114 100644
+--- a/native/src/base/files.rs
++++ b/native/src/base/files.rs
+@@ -22,6 +22,7 @@ use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+ } else {
+ use winsup::fd::{AsFd, BorrowedFd, IntoRawFd};
+ use winsup::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
++use std::ffi::c_void;
+ }
+ }
+ use std::path::Path;
+@@ -164,27 +165,41 @@ pub fn fd_path(fd: RawFd, utf8_buf: &mut dyn Utf8CStrBuf) -> io::Result<()> {
+ use filepath::FilePath;
+ 
+ #[cfg(target_os = "windows")]
+-pub fn fd_path(fd: RawFd, utf8_buf: &mut dyn Utf8CStrBuf) -> io::Result<()> {
++pub fn fd_path(fd: RawFd, buf: &mut dyn Utf8CStrBuf) -> OsResult<'static, ()>{
+     unsafe {
+-        let buf = utf8_buf.as_str_mut().as_bytes_mut();
++        //let buf: &mut [u8] = utf8_buf.as_mut().as_bytes_mut();
++        buf.clear();
+         let file = File::from_raw_fd(fd);
++        
+         let path = match file.path() {
+-           Ok(p) => p,
+-           Err(_) => {
+-               return Err(io::Error::last_os_error())
+-           }
+-       };
+-       let path_str = match path.to_str() {
+-           Some(s) => s.as_bytes(),
+-           None => {
+-               return Err(io::Error::last_os_error())
+-           }
+-       };
+-       let bytes_to_copy = path_str.len().min(buf.len().saturating_sub(1));
+-       buf[..bytes_to_copy].copy_from_slice(&path_str[..bytes_to_copy]);
+-       buf.get_mut(bytes_to_copy).map(|b| *b = 0);
+-       Ok(())
+-   }
++            Ok(p) => p,
++            Err(e) => return Err(OsError::with_os_error(
++                e.raw_os_error().unwrap_or(-1),
++                "Invalid path".into(), None, None
++            )),
++        };
++        
++        let path_str = path.to_str().ok_or(OsError::with_os_error(
++                libc::EINVAL,
++                "Invalid UTF-8 path".into(), None, None
++        ))?.as_bytes();
++        
++        //let bytes_to_copy = path_str.len().min(buf.len().saturating_sub(1));
++        //buf[..bytes_to_copy].copy_from_slice(&path_str[..bytes_to_copy]);
++        //buf.get_mut(bytes_to_copy).map(|b| *b = 0);
++        unsafe {
++            let len = path_str.len();
++            libc::memcpy(
++                buf.as_mut_ptr() as *mut c_void,
++                path_str.as_ptr() as *const c_void,
++                len,
++            );
++            *(buf.as_mut_ptr().offset((len as usize).try_into().unwrap()) as *mut u8) = b'\0';
++            buf.set_len(len as usize);
++        }
++        
++        Ok(())
++    }
+ }
+ 
+ pub struct FileAttr {
+@@ -399,6 +414,8 @@ impl Utf8CStr {
+         Ok(())
+     }
+ 
++cfg_if::cfg_if! {
++if #[cfg(not(target_os = "windows"))] {
+     pub fn get_secontext(&self, con: &mut dyn Utf8CStrBuf) -> OsResult<()> {
+         unsafe {
+             let sz = libc::lgetxattr(
+@@ -431,6 +448,8 @@ impl Utf8CStr {
+             .check_os_err("lsetxattr", Some(self), Some(con))
+         }
+     }
++}
++}
+ 
+     pub fn copy_to(&self, path: &Utf8CStr) -> OsResultStatic<()> {
+         let attr = self.get_attr()?;
+@@ -482,14 +501,14 @@ impl Utf8CStr {
+             .parent()
+             .map(Path::as_os_str)
+             // SAFETY: all substring of self is valid UTF-8
+-            .map(|s| unsafe { std::str::from_utf8_unchecked(s.as_bytes()) })
++            .map(|s| unsafe { std::str::from_utf8_unchecked(s.as_encoded_bytes()) })
+     }
+ 
+     pub fn file_name(&self) -> Option<&str> {
+         Path::new(self.as_str())
+             .file_name()
+             // SAFETY: all substring of self is valid UTF-8
+-            .map(|s| unsafe { std::str::from_utf8_unchecked(s.as_bytes()) })
++            .map(|s| unsafe { std::str::from_utf8_unchecked(s.as_encoded_bytes()) })
+     }
+ 
+     // ln self path
+@@ -524,9 +543,12 @@ impl Utf8CStr {
+         }
+     }
+ 
++cfg_if::cfg_if! {
++if #[cfg(not(target_os = "windows"))] {
+     pub fn mkfifo(&self, mode: mode_t) -> OsResult<()> {
+         unsafe { libc::mkfifo(self.as_ptr(), mode).check_os_err("mkfifo", Some(self), None) }
+     }
++}}
+ }
+ 
+ impl FsPathFollow {
+@@ -552,11 +574,15 @@ impl FsPathFollow {
+                 Some(self),
+                 None,
+             )?;
++
++cfg_if::cfg_if! {
++if #[cfg(not(target_os = "windows"))] {
+             libc::chown(self.as_ptr(), attr.st.st_uid, attr.st.st_gid).check_os_err(
+                 "chown",
+                 Some(self),
+                 None,
+             )?;
++}}
+ 
+             #[cfg(feature = "selinux")]
+             if !attr.con.is_empty() {
+@@ -566,6 +592,8 @@ impl FsPathFollow {
+         Ok(())
+     }
+ 
++cfg_if::cfg_if! {
++if #[cfg(not(target_os = "windows"))] {
+     pub fn get_secontext(&self, con: &mut dyn Utf8CStrBuf) -> OsResult<()> {
+         unsafe {
+             let sz = libc::getxattr(
+@@ -598,6 +626,7 @@ impl FsPathFollow {
+             .check_os_err("setxattr", Some(self), Some(con))
+         }
+     }
++}}
+ }
+ 
+ pub trait FsPathBuilder {
+@@ -677,6 +706,8 @@ pub fn fd_set_attr(fd: RawFd, attr: &FileAttr) -> OsResult<()> {
+     Ok(())
+ }
+ 
++cfg_if::cfg_if! {
++if #[cfg(not(target_os = "windows"))] {
+ pub fn fd_get_secontext(fd: RawFd, con: &mut dyn Utf8CStrBuf) -> OsResult<'static, ()> {
+     unsafe {
+         let sz = libc::fgetxattr(
+@@ -708,6 +739,7 @@ pub fn fd_set_secontext(fd: RawFd, con: &Utf8CStr) -> OsResult<()> {
+         .check_os_err("fsetxattr", Some(con), None)
+     }
+ }
++}}
+ 
+ pub fn clone_attr<'a>(a: &'a Utf8CStr, b: &'a Utf8CStr) -> OsResult<'a, ()> {
+     let attr = a.get_attr().map_err(|e| e.set_args(Some(a), None))?;
+@@ -768,9 +800,15 @@ unsafe extern "C" {
+     fn ioctl(fd: RawFd, request: u32, ...) -> i32;
+ }
+ 
++#[cfg(unix)]
++const AT_FDCWD: *mut c_void = libc::AT_FDCWD;
++
++#[cfg(windows)]
++const AT_FDCWD: *mut c_void = std::ptr::null_mut();
++
+ // We mark the returned slice static because it is valid until explicitly unmapped
+ pub(crate) fn map_file(path: &Utf8CStr, rw: bool) -> OsResult<&'static mut [u8]> {
+-    unsafe { map_file_at(BorrowedFd::borrow_raw(libc::AT_FDCWD), path, rw) }
++    unsafe { map_file_at(BorrowedFd::borrow_raw(AT_FDCWD), path, rw) }
+ }
+ 
+ pub(crate) fn map_file_at<'a>(
+@@ -792,6 +830,8 @@ pub(crate) fn map_file_at<'a>(
+ 
+     let flag = if rw { O_RDWR } else { O_RDONLY };
+     let fd = unsafe {
++cfg_if::cfg_if! {
++    if #[cfg(not(target_os = "windows"))] {
+         OwnedFd::from_raw_fd(
+             libc::openat(dirfd.as_raw_fd(), path.as_ptr(), flag | O_CLOEXEC).as_os_result(
+                 "openat",
+@@ -799,15 +839,31 @@ pub(crate) fn map_file_at<'a>(
+                 None,
+             )?,
+         )
++    } else {
++        OwnedFd::from_raw_fd(
++            libc::open(path.as_ptr(), flag | O_CLOEXEC).as_os_result(
++                "openat",
++                Some(path),
++                None,
++            )?,
++        )
++    }}
+     };
+ 
+     let attr = fd_get_attr(fd.as_raw_fd())?;
+     let sz = if attr.is_block_device() {
++cfg_if::cfg_if! {
++if #[cfg(any(target_os = "linux", target_os = "android"))] {
+         let mut sz = 0_u64;
+         unsafe {
+             ioctl(fd.as_raw_fd(), BLKGETSIZE64, &mut sz).check_os_err("ioctl", Some(path), None)?;
+         }
+         sz
++    } else { 
++        0 // marked not support windows
++    }
++}
++        
+     } else {
+         attr.st.st_size as u64
+     };
+diff --git a/native/src/base/lib.rs b/native/src/base/lib.rs
+index e5b572ccd..aaeffb307 100644
+--- a/native/src/base/lib.rs
++++ b/native/src/base/lib.rs
+@@ -9,7 +9,10 @@ pub use cstr::{
+ };
+ use cxx_extern::*;
+ pub use dir::*;
++
++#[cfg(not(target_os = "windows"))]
+ pub use ffi::fork_dont_care;
++
+ pub use files::*;
+ pub use logging::*;
+ pub use misc::*;
+@@ -21,7 +24,7 @@ mod dir;
+ mod files;
+ mod logging;
+ mod misc;
+-mod mount;
++//mod mount;
+ mod result;
+ mod xwrap;
+ 
+@@ -46,6 +49,8 @@ pub mod ffi {
+         type Utf8CStrRef<'a> = &'a crate::cstr::Utf8CStr;
+ 
+         fn mut_u8_patch(buf: &mut [u8], from: &[u8], to: &[u8]) -> Vec<usize>;
++
++        #[cfg(not(target_os = "windows"))]
+         fn fork_dont_care() -> i32;
+     }
+ 
+diff --git a/native/src/base/xwrap.hpp b/native/src/base/xwrap.hpp
+index 4fafeff53..47827de52 100644
+--- a/native/src/base/xwrap.hpp
++++ b/native/src/base/xwrap.hpp
+@@ -3,7 +3,9 @@
+ #include <unistd.h>
+ #include <dirent.h>
+ #include <stdio.h>
++#ifndef _WIN32
+ #include <poll.h>
++#endif
+ #include <fcntl.h>
+ 
+ extern "C" {
+@@ -21,10 +23,12 @@ DIR *xopendir(const char *name);
+ DIR *xfdopendir(int fd);
+ dirent *xreaddir(DIR *dirp);
+ pid_t xsetsid();
++#ifndef __WIN32
+ int xsocket(int domain, int type, int protocol);
+ int xbind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+ int xlisten(int sockfd, int backlog);
+ int xaccept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags);
++#endif
+ int xstat(const char *pathname, struct stat *buf);
+ int xfstat(int fd, struct stat *buf);
+ int xdup(int fd);
+@@ -33,16 +37,20 @@ ssize_t xreadlink(const char * __restrict__ pathname, char * __restrict__ buf, s
+ ssize_t xreadlinkat(
+         int dirfd, const char * __restrict__ pathname, char * __restrict__ buf, size_t bufsiz);
+ int xsymlink(const char *target, const char *linkpath);
++#ifndef _WIN32
+ int xmount(const char *source, const char *target,
+            const char *filesystemtype, unsigned long mountflags,
+            const void *data);
+ int xumount2(const char *target, int flags);
++#endif
+ int xrename(const char *oldpath, const char *newpath);
+ int xmkdir(const char *pathname, mode_t mode);
+ int xmkdirs(const char *pathname, mode_t mode);
+ ssize_t xsendfile(int out_fd, int in_fd, off_t *offset, size_t count);
+ pid_t xfork();
++#ifndef _WIN32
+ int xpoll(pollfd *fds, nfds_t nfds, int timeout);
++#endif
+ ssize_t xrealpath(const char * __restrict__ path, char * __restrict__ buf, size_t bufsiz);
+ #if 0
+ int xmknod(const char * pathname, mode_t mode, dev_t dev);
+diff --git a/native/src/base/xwrap.rs b/native/src/base/xwrap.rs
+index 0c4a68380..472e4a911 100644
+--- a/native/src/base/xwrap.rs
++++ b/native/src/base/xwrap.rs
+@@ -206,9 +206,9 @@ unsafe extern "C" fn xreaddir(mut dir: BorrowedDirectory) -> *mut libc::dirent {
+         .map_or(ptr::null_mut(), |entry| entry.as_ptr())
+ }
+ 
+-#[unsafe(no_mangle)]
+ cfg_if::cfg_if! {
+ if #[cfg(not(target_os = "windows"))] {
++#[unsafe(no_mangle)]
+ extern "C" fn xsetsid() -> i32 {
+     unsafe {
+         libc::setsid()
+diff --git a/native/src/boot/compress.rs b/native/src/boot/compress.rs
+index 597154c04..756a93e3b 100644
+--- a/native/src/boot/compress.rs
++++ b/native/src/boot/compress.rs
+@@ -13,7 +13,13 @@ use std::io::{BufWriter, Read, Write};
+ use std::mem::ManuallyDrop;
+ use std::num::NonZeroU64;
+ use std::ops::DerefMut;
++
++#[cfg(unix)]
+ use std::os::fd::{FromRawFd, RawFd};
++
++#[cfg(windows)]
++use winsup::fd::{FromRawFd, RawFd};
++
+ use xz2::{
+     stream::{Check as LzmaCheck, Filters as LzmaFilters, LzmaOptions, Stream as LzmaStream},
+     write::{XzDecoder, XzEncoder},
+diff --git a/native/src/boot/cpio.rs b/native/src/boot/cpio.rs
+index a02f849b6..744da10c8 100644
+--- a/native/src/boot/cpio.rs
++++ b/native/src/boot/cpio.rs
+@@ -413,8 +413,10 @@ impl Cpio {
+             file.open(O_RDONLY | O_CLOEXEC)?.read_to_end(&mut content)?;
+             mode | S_IFREG
+         } else {
++            unsafe {
+             rdevmajor = major(attr.st.st_rdev.as_()).as_();
+             rdevminor = minor(attr.st.st_rdev.as_()).as_();
++            }
+             if attr.is_block_device() {
+                 mode | S_IFBLK
+             } else if attr.is_char_device() {
+diff --git a/native/src/boot/payload.rs b/native/src/boot/payload.rs
+index 4b8409523..4c8d746b3 100644
+--- a/native/src/boot/payload.rs
++++ b/native/src/boot/payload.rs
+@@ -5,10 +5,10 @@ use std::{
+     io::{BufReader, Read, Seek, SeekFrom, Write},
+ };
+ 
+-#[cfg(not(target = "windows"))]
++#[cfg(not(target_os = "windows"))]
+ use std::os::fd::FromRawFd;
+ 
+-#[cfg(target = "windows")]
++#[cfg(target_os = "windows")]
+ use winsup::fd::FromRawFd;
+ 
+ use crate::compress::get_decoder;
+-- 
+2.43.0
+
