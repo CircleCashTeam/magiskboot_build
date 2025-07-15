@@ -496,7 +496,7 @@ jobs:
             ldlibs: "-lbcrypt"
             vcpkg_triplet: x86-mingw-static
             rust_target: i686-pc-windows-gnullvm
-            build_rust_std: "ON"
+            build_rust_std: "OFF"
 
           - crt: ucrt
             upload_suffix: "x86_64-standalone"
@@ -507,7 +507,7 @@ jobs:
             ldlibs: "-lbcrypt"
             vcpkg_triplet: x64-mingw-static
             rust_target: x86_64-pc-windows-gnullvm
-            build_rust_std: "ON"
+            build_rust_std: "OFF"
 
           - crt: ucrt
             upload_suffix: "arm64-standalone"
@@ -521,7 +521,7 @@ jobs:
 
             vcpkg_triplet: arm64-mingw-static
             rust_target: aarch64-pc-windows-gnullvm
-            build_rust_std: "ON"
+            build_rust_std: "OFF"
     env:
       toolchain_url: https://github.com/mstorsjo/llvm-mingw/releases/download
       toolchain_ver: 20250709
