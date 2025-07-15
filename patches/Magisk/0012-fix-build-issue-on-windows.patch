@@ -231,7 +231,7 @@ index 826b4b3c7..5dd741114 100644
  }
  
 +#[cfg(unix)]
-+const AT_FDCWD: *mut c_void = libc::AT_FDCWD;
++const AT_FDCWD: i32 = libc::AT_FDCWD;
 +
 +#[cfg(windows)]
 +const AT_FDCWD: *mut c_void = std::ptr::null_mut();
