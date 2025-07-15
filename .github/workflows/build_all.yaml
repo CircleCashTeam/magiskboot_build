@@ -545,7 +545,7 @@ jobs:
         if: steps.cache-llvm-mingw.outputs.cache-hit != 'true'
         run: |
           rm -rf ${{ env.progname }}-llvm-mingw.tar.xz $GITHUB_WORKSPACE/${{ env.progname }}-llvm-mingw
-          wget ${{ env.toolchain_url }}/${{ env.toolchain_ver }}/llvm-mingw-${{ env.toolchain_ver }}-${{ matrix.crt }}-ubuntu-20.04-x86_64.tar.xz \
+          wget ${{ env.toolchain_url }}/${{ env.toolchain_ver }}/llvm-mingw-${{ env.toolchain_ver }}-${{ matrix.crt }}-ubuntu-22.04-x86_64.tar.xz \
                 -O ${{ env.progname }}-llvm-mingw.tar.xz
           mkdir -p $GITHUB_WORKSPACE/${{ env.progname }}-llvm-mingw
           tar -x -f ${{ env.progname }}-llvm-mingw.tar.xz -C $GITHUB_WORKSPACE/${{ env.progname }}-llvm-mingw --strip-components=1
