@@ -532,7 +532,7 @@ jobs:
         run: |
           sudo apt update
           sudo DEBIAN_FRONTEND=noninteractive apt install -y curl wget tar file \
-                                        build-essential pkg-config cmake ninja-build
+                                        build-essential pkg-config cmake ninja-build rustup
 
       - name: Cache (LLVM MinGW)
         id: cache-llvm-mingw
@@ -568,12 +568,13 @@ jobs:
 
       - name: Prepare (Cross)
         run: |
-          vcpkg install --host-triplet=${{ matrix.vcpkg_triplet }} zlib liblzma lz4 'bzip2[core]'
+          vcpkg install --host-triplet=${{ matrix.vcpkg_triplet }} liblzma lz4
 
       - name: Prepare (Rust)
         if: matrix.build_rust_std == 'OFF'
         run: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          #curl https://sh.rustup.rs -sSf | sh -s -- -y
+          rustup default stable
 
       - name: Prepare (Nightly Rust)
         if: matrix.build_rust_std == 'ON'
