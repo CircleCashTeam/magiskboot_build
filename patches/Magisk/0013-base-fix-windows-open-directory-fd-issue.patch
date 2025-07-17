@@ -1,0 +1,134 @@
+From f40be5915848b9fe399fe744ed55f30fad50d297 Mon Sep 17 00:00:00 2001
+From: affggh <879632264@qq.com>
+Date: Thu, 17 Jul 2025 23:03:48 +0800
+Subject: [PATCH] base: fix windows open directory fd issue
+
+---
+ native/src/base/files.rs | 57 +++++++++++++++++++++++-----------------
+ native/src/base/xwrap.rs |  1 -
+ 2 files changed, 33 insertions(+), 25 deletions(-)
+
+diff --git a/native/src/base/files.rs b/native/src/base/files.rs
+index 409a1d46a..7664d1d29 100644
+--- a/native/src/base/files.rs
++++ b/native/src/base/files.rs
+@@ -23,6 +23,7 @@ use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+ use winsup::fd::{AsFd, BorrowedFd, IntoRawFd};
+ use winsup::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+ use std::ffi::c_void;
++use std::os::windows::fs::OpenOptionsExt;
+ }
+ }
+ use std::path::Path;
+@@ -236,7 +237,11 @@ impl FileAttr {
+     }
+ 
+     pub fn is_block_device(&self) -> bool {
+-        self.is(libc::S_IFBLK)
++        if cfg!(not(target_os = "windows")) {
++            self.is(libc::S_IFBLK)
++        } else {
++            false
++        }
+     }
+ 
+     pub fn is_char_device(&self) -> bool {
+@@ -800,15 +805,36 @@ unsafe extern "C" {
+     fn ioctl(fd: RawFd, request: u32, ...) -> i32;
+ }
+ 
+-#[cfg(unix)]
+-const AT_FDCWD: i32 = libc::AT_FDCWD;
++// Windows API constant for opening directories
++#[cfg(target_os = "windows")]
++const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x02000000;
++
++#[cfg(target_os = "windows")]
++fn open_directory(path: &str) -> std::io::Result<OwnedFd> {
++    let file = File::options()
++        .read(true)
++        .write(true)
++        .attributes(FILE_FLAG_BACKUP_SEMANTICS)
++        .open(path)?;
++
++    // 获取原始句柄并转换为 OwnedHandle
++    let raw_fd = file.into_raw_fd();
++    let fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+ 
+-#[cfg(windows)]
+-const AT_FDCWD: *mut c_void = std::ptr::null_mut();
++    Ok(fd)
++}
+ 
+ // We mark the returned slice static because it is valid until explicitly unmapped
+ pub(crate) fn map_file(path: &Utf8CStr, rw: bool) -> OsResult<&'static mut [u8]> {
+-    unsafe { map_file_at(BorrowedFd::borrow_raw(AT_FDCWD), path, rw) }
++    #[cfg(unix)]
++    unsafe { map_file_at(BorrowedFd::borrow_raw(libc::AT_FDCWD), path, rw) }
++
++    #[cfg(windows)]
++    unsafe { map_file_at(
++        open_directory(".").map_err(|e| OsError::with_os_error(
++            e.raw_os_error().unwrap_or(-1),
++            "Failed to open current directory".into(), None, None
++        ))?.as_fd(), path, rw) }
+ }
+ 
+ pub(crate) fn map_file_at<'a>(
+@@ -830,8 +856,6 @@ pub(crate) fn map_file_at<'a>(
+ 
+     let flag = if rw { O_RDWR } else { O_RDONLY };
+     let fd = unsafe {
+-cfg_if::cfg_if! {
+-    if #[cfg(not(target_os = "windows"))] {
+         OwnedFd::from_raw_fd(
+             libc::openat(dirfd.as_raw_fd(), path.as_ptr(), flag | O_CLOEXEC).as_os_result(
+                 "openat",
+@@ -839,31 +863,16 @@ cfg_if::cfg_if! {
+                 None,
+             )?,
+         )
+-    } else {
+-        OwnedFd::from_raw_fd(
+-            libc::open(path.as_ptr(), flag | O_CLOEXEC).as_os_result(
+-                "openat",
+-                Some(path),
+-                None,
+-            )?,
+-        )
+-    }}
+     };
+ 
+     let attr = fd_get_attr(fd.as_raw_fd())?;
+     let sz = if attr.is_block_device() {
+-cfg_if::cfg_if! {
+-if #[cfg(any(target_os = "linux", target_os = "android"))] {
+         let mut sz = 0_u64;
+         unsafe {
++            #[cfg(not(target_os = "windows"))]
+             ioctl(fd.as_raw_fd(), BLKGETSIZE64, &mut sz).check_os_err("ioctl", Some(path), None)?;
+         }
+         sz
+-    } else { 
+-        0 // marked not support windows
+-    }
+-}
+-        
+     } else {
+         attr.st.st_size as u64
+     };
+diff --git a/native/src/base/xwrap.rs b/native/src/base/xwrap.rs
+index 472e4a911..0f44f9bed 100644
+--- a/native/src/base/xwrap.rs
++++ b/native/src/base/xwrap.rs
+@@ -413,7 +413,6 @@ unsafe extern "C" fn xpoll(fds: *mut pollfd, nfds: nfds_t, timeout: i32) -> i32
+ }
+ 
+ #[unsafe(no_mangle)]
+-#[cfg(not(target_os = "windows"))]
+ unsafe extern "C" fn xmknod(pathname: *const c_char, mode: mode_t, dev: dev_t) -> i32 {
+     unsafe {
+         libc::mknod(pathname, mode, dev)
+-- 
+2.43.0
+
