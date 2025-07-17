@@ -55,7 +55,7 @@ macro_rules! f {
     })*) => ($(
         #[inline]
         $(#[$attr])*
-        pub unsafe extern fn $i($($arg: $argty),*
+        pub unsafe extern "C" fn $i($($arg: $argty),*
         ) -> $ret {
             $($body);*
         }
@@ -70,7 +70,7 @@ macro_rules! safe_f {
     })*) => ($(
         #[inline]
         $(#[$attr])*
-        pub extern fn $i($($arg: $argty),*
+        pub extern "C" fn $i($($arg: $argty),*
         ) -> $ret {
             $($body);*
         }
